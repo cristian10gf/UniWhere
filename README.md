@@ -153,3 +153,4 @@ Qué hace:
 - [docs/Entregable-1-1.md](docs/Entregable-1-1.md): versión markdown del entregable 1.
 - [docs/arquitectura-logica.md](docs/arquitectura-logica.md): flujo lógico del sistema y rol de los modelos integrados.
 - [docs/diagrama-arquitectura.md](docs/diagrama-arquitectura.md): diagrama formal del sistema en vista de flujo y por capas.
+- [docs/uso-colmap-docker.md](docs/uso-colmap-docker.md): flujo recomendado para correr COLMAP con Docker usando series en preprocesamiento/data.
