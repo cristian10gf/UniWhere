@@ -8,6 +8,8 @@ VFE_DIR="$REPO_ROOT/preprocesamiento/VideoFrameExtractor"
 TOOLS_DIR="$REPO_ROOT/.tools"
 VENV_DIR="$TOOLS_DIR/videoframeextractor"
 VFE_TOOL_NAME="videoframeextractor"
+COLMAP_DIR="$REPO_ROOT/preprocesamiento/models/colmap"
+ACE_DIR="$REPO_ROOT/preprocesamiento/models/ace"
 
 log() {
     printf '[INFO] %s\n' "$1"
@@ -78,11 +80,111 @@ install_cloudcompare() {
     fail "No se encontró un método automático para instalar CloudCompare. Instala flatpak o usa una distribución con apt-get"
 }
 
+install_ffmpeg() {
+    if command -v ffmpeg >/dev/null 2>&1; then
+        log "ffmpeg ya está instalado: $(ffmpeg -version 2>&1 | head -1)"
+        return 0
+    fi
+
+    if command -v apt-get >/dev/null 2>&1; then
+        log "Instalando ffmpeg con apt-get"
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg
+    elif command -v brew >/dev/null 2>&1; then
+        log "Instalando ffmpeg con brew"
+        brew install ffmpeg
+    elif command -v dnf >/dev/null 2>&1; then
+        log "Instalando ffmpeg con dnf"
+        sudo dnf install -y ffmpeg
+    elif command -v pacman >/dev/null 2>&1; then
+        log "Instalando ffmpeg con pacman"
+        sudo pacman -S --noconfirm ffmpeg
+    else
+        fail "No se encontró un gestor de paquetes para instalar ffmpeg. Instálalo manualmente."
+    fi
+
+    log "ffmpeg instalado: $(ffmpeg -version 2>&1 | head -1)"
+}
+
+build_colmap_docker() {
+    if ! command -v docker >/dev/null 2>&1; then
+        log "Docker no está instalado. Omitiendo imagen COLMAP."
+        return 0
+    fi
+
+    if docker image inspect colmap:latest >/dev/null 2>&1; then
+        log "Imagen colmap:latest ya existe localmente"
+        return 0
+    fi
+
+    log "Descargando imagen oficial de COLMAP desde Docker Hub"
+    if docker pull colmap/colmap:latest; then
+        log "Imagen colmap/colmap:latest descargada"
+    else
+        log "No se pudo descargar. Intentando construir desde código fuente en $COLMAP_DIR"
+        if [[ -f "$COLMAP_DIR/docker/Dockerfile" ]]; then
+            docker build -f "$COLMAP_DIR/docker/Dockerfile" -t colmap:latest "$COLMAP_DIR"
+            log "Imagen colmap:latest construida localmente"
+        else
+            log "Advertencia: no se encontró Dockerfile de COLMAP. Los scripts lo descargarán al ejecutarse."
+        fi
+    fi
+}
+
+build_ace_docker() {
+    if ! command -v docker >/dev/null 2>&1; then
+        log "Docker no está instalado. Omitiendo imagen ACE."
+        return 0
+    fi
+
+    if docker image inspect ace:latest >/dev/null 2>&1; then
+        log "Imagen ace:latest ya existe localmente"
+        return 0
+    fi
+
+    if [[ ! -f "$ACE_DIR/docker/Dockerfile" ]]; then
+        log "Advertencia: no se encontró Dockerfile de ACE en $ACE_DIR/docker/. Omitiendo."
+        return 0
+    fi
+
+    local encoder="$ACE_DIR/ace_encoder_pretrained.pt"
+    if [[ ! -f "$encoder" ]]; then
+        log "Descargando pesos del encoder ACE preentrenado..."
+        if command -v wget >/dev/null 2>&1; then
+            wget -q --show-progress -O "$ACE_DIR/ace_models.tar.gz" \
+                "https://storage.googleapis.com/niantic-lon-static/research/ace/ace_models.tar.gz"
+        elif command -v curl >/dev/null 2>&1; then
+            curl -L -o "$ACE_DIR/ace_models.tar.gz" \
+                "https://storage.googleapis.com/niantic-lon-static/research/ace/ace_models.tar.gz"
+        else
+            log "Advertencia: no se encontró wget ni curl. Descarga ace_encoder_pretrained.pt manualmente."
+            log "  URL: https://storage.googleapis.com/niantic-lon-static/research/ace/ace_models.tar.gz"
+            log "  Destino: $encoder"
+            return 0
+        fi
+        tar -xzf "$ACE_DIR/ace_models.tar.gz" -C "$ACE_DIR" ace_encoder_pretrained.pt 2>/dev/null || \
+            tar -xzf "$ACE_DIR/ace_models.tar.gz" -C "$ACE_DIR" 2>/dev/null
+        rm -f "$ACE_DIR/ace_models.tar.gz"
+    fi
+
+    if [[ -f "$encoder" ]]; then
+        log "Construyendo imagen ace:latest desde $ACE_DIR"
+        docker build -f "$ACE_DIR/docker/Dockerfile" -t ace:latest "$ACE_DIR"
+        log "Imagen ace:latest construida"
+    else
+        log "Advertencia: ace_encoder_pretrained.pt no encontrado. La imagen se construirá sin él."
+        log "  El script run.sh intentará construir la imagen al ejecutarse."
+    fi
+}
+
 main() {
     [[ -d "$VFE_DIR" ]] || fail "No se encontró el directorio de VideoFrameExtractor en $VFE_DIR"
 
+    install_ffmpeg
     install_videoframeextractor
     install_cloudcompare
+    build_colmap_docker
+    build_ace_docker
 
     log "Instalación completada"
 }
