@@ -168,6 +168,30 @@ Si no lo tienes instalado, puedes usar el instalador del proyecto:
 ./scripts/install_tools.sh
 ```
 
+## Exportar resultados a ZIP
+
+Si quieres compartir una serie ya procesada por COLMAP sin incluir las imagenes originales, usa [preprocesamiento/scripts/export-colmap-results.sh](../preprocesamiento/scripts/export-colmap-results.sh).
+
+El script:
+
+- pide solo el nombre de la serie
+- asume que existe en [preprocesamiento/data](../preprocesamiento/data)
+- genera un archivo llamado <serie>-colmap-results.zip dentro de esa misma carpeta
+- excluye la carpeta images y archivos de imagen comunes
+
+Uso:
+
+```bash
+cd /home/cristian/Documentos/proyectos/UniWhere/preprocesamiento
+./scripts/export-colmap-results.sh
+```
+
+Luego ingresa, por ejemplo:
+
+```text
+edificio-a
+```
+
 ## Dataset de ejemplo
 
 Si necesitas una fuente publica para pruebas, puedes revisar el dataset visual-inertial de TUM:
