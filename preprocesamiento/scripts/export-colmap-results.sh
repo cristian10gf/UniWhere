@@ -12,10 +12,15 @@ if ! command -v zip >/dev/null 2>&1; then
     exit 1
 fi
 
-read -r -p "Nombre de la serie: " SERIES_NAME
+if [ $# -ge 1 ]; then
+    SERIES_NAME="$1"
+else
+    read -r -p "Nombre de la serie: " SERIES_NAME
+fi
 
 if [ -z "$SERIES_NAME" ]; then
     echo "Error: debes indicar el nombre de la serie."
+    echo "Uso: $0 <nombre_serie>"
     exit 1
 fi
 
