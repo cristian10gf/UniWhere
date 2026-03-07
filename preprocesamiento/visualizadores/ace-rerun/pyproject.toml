@@ -1,0 +1,17 @@
+[project]
+name = "ace-rerun-visualizer"
+version = "0.1.0"
+description = "Visualizador interactivo de resultados ACE usando Rerun"
+requires-python = ">=3.10"
+dependencies = [
+    "rerun-sdk",
+    "torch",
+    "numpy",
+    "opencv-python",
+    "scikit-image",
+    "Pillow",
+    "plyfile",
+]
+
+[dependency-groups]
+dev = []
