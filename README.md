@@ -102,6 +102,52 @@ Actúa como espacio reservado para la futura experiencia cliente, previsiblement
 
 El repositorio todavía se comporta más como una plataforma de integración de modelos de percepción espacial que como una aplicación final cerrada. Eso es consistente con el entregable 1: primero se está consolidando la base de reconstrucción, relocalización y comprensión del entorno; después podrá cerrarse la capa de guiado y experiencia AR de usuario.
 
+## Instalación de herramientas auxiliares
+
+El repositorio incluye dos instaladores para preparar VideoFrameExtractor y CloudCompare automáticamente.
+
+### Linux o macOS con bash
+
+Ejecuta:
+
+```bash
+./scripts/install_tools.sh
+```
+
+Qué hace:
+
+- instala VideoFrameExtractor desde [preprocesamiento/VideoFrameExtractor](preprocesamiento/VideoFrameExtractor);
+- si existe uv, lo instala como tool persistente con `uv tool install --editable`;
+- si uv no existe, crea un entorno virtual local en `.tools/videoframeextractor` usando Python 3.12+;
+- instala CloudCompare con flatpak si está disponible;
+- y, si no hay flatpak, intenta instalar CloudCompare con `apt-get`.
+
+Nota sobre uv:
+
+- cuando se usa uv, el comando esperado es `videoframeextractor` en el PATH del usuario;
+- si no aparece inmediatamente en la sesión actual, abre una nueva terminal o ejecuta `uv tool update-shell`.
+
+### Windows con PowerShell
+
+Ejecuta:
+
+```powershell
+./scripts/install_tools.ps1
+```
+
+Qué hace:
+
+- instala VideoFrameExtractor desde [preprocesamiento/VideoFrameExtractor](preprocesamiento/VideoFrameExtractor);
+- si existe uv, lo instala como tool persistente con `uv tool install --editable`;
+- si uv no existe, crea un entorno virtual local en `.tools/videoframeextractor` usando Python 3.12+;
+- instala CloudCompare con `winget` usando el identificador oficial `CloudCompare.CloudCompare`.
+
+### Requisitos mínimos
+
+- para VideoFrameExtractor: `uv` o Python 3.12+;
+- para CloudCompare en Linux: `flatpak` o `apt-get`;
+- para CloudCompare en Windows: `winget`.
+
 ## Documentos relacionados
 
 - [docs/Entregable-1-1.md](docs/Entregable-1-1.md): versión markdown del entregable 1.
