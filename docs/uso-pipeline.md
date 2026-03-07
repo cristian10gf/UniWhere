@@ -50,6 +50,7 @@ Todo el flujo se puede ejecutar con un solo comando usando `pipeline.sh`, o paso
 | Conversor COLMAP a ACE | [preprocesamiento/scripts/colmap2ace.py](../preprocesamiento/scripts/colmap2ace.py) | Convertir salida sparse de COLMAP al formato de dataset ACE |
 | ACE Docker | [preprocesamiento/models/ace/docker/](../preprocesamiento/models/ace/docker/) | Dockerfile y wrapper para entrenar/evaluar ACE |
 | ACE shortcut | [preprocesamiento/run-ace.sh](../preprocesamiento/run-ace.sh) | Wrapper de conveniencia para ACE (como `run-colmap.sh`) |
+| ACE Viewer | [preprocesamiento/run-ace-viewer.sh](../preprocesamiento/run-ace-viewer.sh) | Visualizador interactivo de resultados ACE con Rerun |
 | COLMAP Docker | [preprocesamiento/models/colmap/docker/](../preprocesamiento/models/colmap/docker/) | Dockerfile y wrappers existentes para COLMAP |
 
 ## Requisitos previos
@@ -541,6 +542,105 @@ La imagen `ace:latest` se construye automaticamente si no existe. Contiene:
 
 La imagen usa un Dockerfile multi-stage: el builder compila dsacstar con los headers de desarrollo, y el runtime solo incluye las librerias necesarias para ejecucion.
 
+## 5. Visualizacion de resultados ACE
+
+El visualizador interactivo [ace-rerun](../preprocesamiento/visualizadores/ace-rerun/) permite inspeccionar los resultados de ACE en 3D usando [Rerun](https://rerun.io/). Carga la nube de puntos original de COLMAP (la reconstruccion densa/sparse con la que se entreno ACE) y la muestra junto con las poses de camara estimadas por ACE.
+
+### Que muestra
+
+- **Nube de puntos COLMAP** coloreada (densa o sparse)
+- **Frustums de camaras de mapping** (entrenamiento)
+- **Poses estimadas por ACE** coloreadas por error (verde=bueno, rojo=malo)
+- **Trayectoria ground truth** de test en azul
+- **Imagenes de query** en el frustum de la pose estimada
+- **Series temporales** de error de rotacion, traslacion e inliers
+- **Timeline interactiva** para navegar por los frames de test
+
+### Wrapper de conveniencia
+
+El archivo [run-ace-viewer.sh](../preprocesamiento/run-ace-viewer.sh) es un shortcut analogo a `run-cloudcompare.sh`:
+
+```bash
+cd preprocesamiento
+
+# Visualizar con auto-deteccion de nube COLMAP
+./run-ace-viewer.sh _merged
+
+# Con resultados de test ACE (poses estimadas)
+./run-ace-viewer.sh _merged --test-poses data/output/poses__merged.txt
+
+# Especificar PLY manualmente
+./run-ace-viewer.sh serie-1 --point-cloud data/serie-1/dense/0/fused.ply
+
+# Exportar nube a PLY para abrir en CloudCompare
+./run-ace-viewer.sh _merged --export-ply nube_colmap.ply
+```
+
+### Uso directo con uv
+
+```bash
+cd preprocesamiento/visualizadores/ace-rerun
+
+# Auto-detectar nube desde directorio COLMAP
+uv run visualize_ace.py \
+  --colmap-dir ../../data/_merged \
+  --scene ../../data/_merged/ace \
+  --test-poses ../../data/output/poses__merged.txt
+
+# Con PLY directo
+uv run visualize_ace.py \
+  --point-cloud ../../data/_merged/dense/0/fused.ply \
+  --scene ../../data/_merged/ace
+
+# Agregar nube adicional extraida de la red ACE (para comparar)
+uv run visualize_ace.py \
+  --colmap-dir ../../data/_merged \
+  --scene ../../data/_merged/ace \
+  --model ../../data/output/_merged.pt \
+  --test-poses ../../data/output/poses__merged.txt
+```
+
+### Opciones
+
+| Opcion | Default | Descripcion |
+|---|---|---|
+| `--point-cloud FILE` | | Path directo a PLY (e.g. `dense/0/fused.ply`) |
+| `--colmap-dir PATH` | | Directorio COLMAP (auto-detecta nube de puntos) |
+| `--scene PATH` | (requerido) | Directorio dataset ACE (con `train/` y `test/`) |
+| `--test-poses FILE` | | Archivo de resultados ACE (`poses_*.txt`) |
+| `--model FILE` | | Head entrenado (`.pt`) para nube adicional de la red |
+| `--encoder FILE` | (auto-detectado) | Encoder pre-entrenado |
+| `--max-points N` | 1000000 | Maximo de puntos a visualizar |
+| `--export-ply FILE` | | Exportar nube a PLY para CloudCompare |
+
+### Deteccion automatica de nube de puntos
+
+Con `--colmap-dir`, el visualizador busca en este orden:
+1. `dense/0/fused.ply` (reconstruccion densa)
+2. `dense/fused.ply`
+3. `sparse/0/points3D.txt` (reconstruccion sparse)
+4. `sparse/0/points3D.bin`
+
+### Estructura del paquete
+
+```text
+preprocesamiento/visualizadores/ace-rerun/
+  pyproject.toml           # Dependencias (uv)
+  visualize_ace.py         # Entry point (CLI + orquestacion)
+  ace_rerun/
+    __init__.py
+    point_cloud.py         # Carga de nubes COLMAP (PLY, points3D.txt/bin)
+    ace_extraction.py      # Extraccion de nube desde red ACE
+    poses.py               # Carga de poses, parsing de resultados ACE
+    viewer.py              # Visualizacion Rerun y exportacion PLY
+```
+
+### Requisitos
+
+- Python >= 3.10 y [uv](https://docs.astral.sh/uv/) instalado.
+- Las dependencias se instalan automaticamente con `uv sync` o al primer `uv run`.
+- GPU con CUDA solo es necesaria si se usa `--model` para extraer nube de la red ACE.
+
 ## Flujo completo paso a paso
 
 Ejemplo con dos series de video, ejecutado manualmente paso a paso:
@@ -586,6 +686,9 @@ python scripts/colmap2ace.py \
 
 # 6. Evaluar
 ./run-ace.sh test _merged/ace output/_merged.pt
+
+# 7. Visualizar resultados en 3D
+./run-ace-viewer.sh _merged --test-poses data/output/poses__merged.txt
 ```
 
 O todo de una vez con `pipeline.sh` (los videos se buscan en `preprocesamiento/videos/` por defecto):
