@@ -1,3 +1,7 @@
+param(
+    [switch]$RebuildColmap
+)
+
 $ErrorActionPreference = 'Stop'
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -89,23 +93,41 @@ function Install-Ffmpeg {
 }
 
 function Build-ColmapDocker {
+    param([switch]$Rebuild)
+
     if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
         Write-Info 'Docker no está instalado. Omitiendo imagen COLMAP.'
         return
     }
 
-    $inspect = docker image inspect colmap:latest 2>&1
-    if ($LASTEXITCODE -eq 0) {
-        Write-Info 'Imagen colmap:latest ya existe localmente'
+    $dockerfile = Join-Path $ColmapDir 'docker/Dockerfile'
+
+    if (-not $Rebuild) {
+        $inspect = docker image inspect colmap:latest 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Write-Info 'Imagen colmap:latest ya existe localmente'
+            Write-Info 'Para reconstruir con soporte GPU (Ceres + cuSOLVER): .\install_tools.ps1 -RebuildColmap'
+            return
+        }
+    }
+
+    if (-not (Test-Path $dockerfile)) {
+        Write-Info 'Advertencia: no se encontró Dockerfile de COLMAP. Descargando imagen oficial (sin GPU bundle adjustment)...'
+        docker pull colmap/colmap:latest
         return
     }
 
-    Write-Info 'Descargando imagen oficial de COLMAP desde Docker Hub'
-    docker pull colmap/colmap:latest
-    if ($LASTEXITCODE -eq 0) {
-        Write-Info 'Imagen colmap/colmap:latest descargada'
+    Write-Info 'Construyendo imagen colmap:latest desde fuente (Ceres con CUDA/cuSOLVER)...'
+    Write-Info 'Esto toma ~20-30 minutos la primera vez.'
+    if ($Rebuild) {
+        docker build --no-cache -f $dockerfile -t colmap:latest $ColmapDir
     } else {
-        Write-Info 'No se pudo descargar la imagen. Los scripts la descargarán al ejecutarse.'
+        docker build -f $dockerfile -t colmap:latest $ColmapDir
+    }
+    if ($LASTEXITCODE -eq 0) {
+        Write-Info 'Imagen colmap:latest construida con soporte GPU para bundle adjustment'
+    } else {
+        throw 'Error al construir la imagen de COLMAP.'
     }
 }
 
@@ -153,6 +175,12 @@ function Build-AceDocker {
 
 if (-not (Test-Path $VfeDir)) {
     throw "No se encontró el directorio de VideoFrameExtractor en $VfeDir"
+}
+
+if ($RebuildColmap) {
+    Build-ColmapDocker -Rebuild
+    Write-Info 'Reconstrucción de COLMAP completada'
+    return
 }
 
 Install-Ffmpeg

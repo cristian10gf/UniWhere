@@ -114,21 +114,35 @@ build_colmap_docker() {
 
     if docker image inspect colmap:latest >/dev/null 2>&1; then
         log "Imagen colmap:latest ya existe localmente"
+        log "Para reconstruir con soporte GPU (Ceres + cuSOLVER): $0 --rebuild-colmap"
         return 0
     fi
 
-    log "Descargando imagen oficial de COLMAP desde Docker Hub"
-    if docker pull colmap/colmap:latest; then
-        log "Imagen colmap/colmap:latest descargada"
-    else
-        log "No se pudo descargar. Intentando construir desde código fuente en $COLMAP_DIR"
-        if [[ -f "$COLMAP_DIR/docker/Dockerfile" ]]; then
-            docker build -f "$COLMAP_DIR/docker/Dockerfile" -t colmap:latest "$COLMAP_DIR"
-            log "Imagen colmap:latest construida localmente"
-        else
-            log "Advertencia: no se encontró Dockerfile de COLMAP. Los scripts lo descargarán al ejecutarse."
-        fi
+    if [[ ! -f "$COLMAP_DIR/docker/Dockerfile" ]]; then
+        log "Advertencia: no se encontró Dockerfile de COLMAP en $COLMAP_DIR/docker/."
+        log "Descargando imagen oficial (sin GPU bundle adjustment)..."
+        docker pull colmap/colmap:latest || true
+        return 0
     fi
+
+    log "Construyendo imagen colmap:latest desde fuente (Ceres con CUDA/cuSOLVER)..."
+    log "Esto toma ~20-30 minutos la primera vez."
+    docker build -f "$COLMAP_DIR/docker/Dockerfile" -t colmap:latest "$COLMAP_DIR"
+    log "Imagen colmap:latest construida con soporte GPU para bundle adjustment"
+}
+
+rebuild_colmap_docker() {
+    if ! command -v docker >/dev/null 2>&1; then
+        fail "Docker no está instalado."
+    fi
+
+    if [[ ! -f "$COLMAP_DIR/docker/Dockerfile" ]]; then
+        fail "No se encontró Dockerfile de COLMAP en $COLMAP_DIR/docker/"
+    fi
+
+    log "Reconstruyendo imagen colmap:latest desde fuente (Ceres con CUDA/cuSOLVER)..."
+    docker build --no-cache -f "$COLMAP_DIR/docker/Dockerfile" -t colmap:latest "$COLMAP_DIR"
+    log "Imagen colmap:latest reconstruida con soporte GPU para bundle adjustment"
 }
 
 build_ace_docker() {
@@ -179,6 +193,16 @@ build_ace_docker() {
 
 main() {
     [[ -d "$VFE_DIR" ]] || fail "No se encontró el directorio de VideoFrameExtractor en $VFE_DIR"
+
+    for arg in "$@"; do
+        case "$arg" in
+            --rebuild-colmap)
+                rebuild_colmap_docker
+                log "Reconstrucción de COLMAP completada"
+                return 0
+                ;;
+        esac
+    done
 
     install_ffmpeg
     install_videoframeextractor
