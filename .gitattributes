@@ -1,0 +1,29 @@
+# Forzar LF para todos los shell scripts (evita CRLF en Windows → errores en Linux)
+*.sh text eol=lf
+
+# Otros archivos de texto con LF
+*.py text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.txt text eol=lf
+*.cfg text eol=lf
+*.conf text eol=lf
+*.env text eol=lf
+Dockerfile text eol=lf
+
+# Binarios: sin conversión de line endings
+*.jpg binary
+*.jpeg binary
+*.png binary
+*.gif binary
+*.bmp binary
+*.tiff binary
+*.ico binary
+*.pt binary
+*.pth binary
+*.ply binary
+*.bin binary
+*.zip binary
+*.tar binary
+*.gz binary
