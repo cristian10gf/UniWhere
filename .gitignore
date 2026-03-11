@@ -1,4 +1,6 @@
 .cursor/
+.agents/
+skills-*
 
 .vscode/
 .idea/
