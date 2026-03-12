@@ -49,6 +49,16 @@ Opciones de ACE:
   --train-ratio RATIO      Ratio train/test para colmap2ace (default: 0.8)
   --ace-output PATH        Ruta de salida del modelo ACE (relativa a data-root, default: output/<nombre>.pt)
 
+Opciones de OneFormer3D:
+  --run-oneformer3d        Ejecutar segmentacion semantica 3D tras COLMAP/merge
+  --oneformer3d-checkpoint PATH  Checkpoint .pth (default: data/weights/oneformer3d/s3dis.pth)
+  --oneformer3d-config PATH      Config del modelo (default: configs/oneformer3d_1xb2_s3dis-area-5.py)
+
+Opciones de NavGraph:
+  --run-navgraph           Generar grafo de navegacion tras OneFormer3D (implica --run-oneformer3d)
+  --navgraph-voxel-size F  Resolucion de grid para zonas (default: 0.1)
+  --navgraph-min-area F    Area minima de zona en m² (default: 2.0)
+
 Ejemplos:
   # Pipeline completo (videos en preprocesamiento/videos/ por defecto)
   ./pipeline.sh --series campus-norte.mp4 campus-sur.mp4 --merge --run-ace
@@ -64,6 +74,12 @@ Ejemplos:
 
   # Solo ACE
   ./pipeline.sh --ace-only _merged/ace
+
+  # Pipeline con segmentacion 3D y grafo de navegacion
+  ./pipeline.sh --series campus.mp4 --merge --run-oneformer3d --run-navgraph
+
+  # Con checkpoint personalizado
+  ./pipeline.sh --series campus.mp4 --merge --run-oneformer3d --oneformer3d-checkpoint weights/custom.pth
 EOF
 }
 
@@ -94,6 +110,16 @@ DO_ACE=0
 ACE_ONLY=""
 TRAIN_RATIO=0.8
 ACE_OUTPUT=""
+
+# OneFormer3D
+DO_ONEFORMER3D=0
+ONEFORMER3D_CHECKPOINT=""
+ONEFORMER3D_CONFIG=""
+
+# NavGraph
+DO_NAVGRAPH=0
+NAVGRAPH_VOXEL_SIZE="0.1"
+NAVGRAPH_MIN_AREA="2.0"
 
 if [ $# -eq 0 ]; then
     usage
@@ -178,6 +204,31 @@ while [[ $# -gt 0 ]]; do
             ;;
         --ace-output)
             ACE_OUTPUT="$2"
+            shift 2
+            ;;
+        --run-oneformer3d)
+            DO_ONEFORMER3D=1
+            shift
+            ;;
+        --oneformer3d-checkpoint)
+            ONEFORMER3D_CHECKPOINT="$2"
+            shift 2
+            ;;
+        --oneformer3d-config)
+            ONEFORMER3D_CONFIG="$2"
+            shift 2
+            ;;
+        --run-navgraph)
+            DO_NAVGRAPH=1
+            DO_ONEFORMER3D=1
+            shift
+            ;;
+        --navgraph-voxel-size)
+            NAVGRAPH_VOXEL_SIZE="$2"
+            shift 2
+            ;;
+        --navgraph-min-area)
+            NAVGRAPH_MIN_AREA="$2"
             shift 2
             ;;
         -*)
@@ -274,6 +325,36 @@ if [ "$MERGE_ONLY" -eq 1 ]; then
         [ "$FORCE_CPU" -eq 1 ] && ace_args+=(--cpu)
 
         "$ACE_RUN_SH" "${ace_args[@]}"
+    fi
+
+    if [ "$DO_ONEFORMER3D" -eq 1 ]; then
+        echo ""
+        echo "Ejecutando OneFormer3D sobre _merged..."
+        ONEFORMER_SH="${SCRIPT_DIR}/../run-oneformer3d.sh"
+        oneformer_args=(--data-dir "${DATA_ROOT}/_merged")
+        [ -n "$ONEFORMER3D_CHECKPOINT" ] && oneformer_args+=(--checkpoint "$ONEFORMER3D_CHECKPOINT")
+        [ -n "$ONEFORMER3D_CONFIG" ] && oneformer_args+=(--config "$ONEFORMER3D_CONFIG")
+        [ "$FORCE_CPU" -eq 1 ] && oneformer_args+=(--cpu)
+
+        "$ONEFORMER_SH" "${oneformer_args[@]}"
+    fi
+
+    if [ "$DO_NAVGRAPH" -eq 1 ]; then
+        echo ""
+        echo "Generando grafo de navegación..."
+        LABELED_PLY="${DATA_ROOT}/_merged/oneformer3d/output/labeled.ply"
+        NAVGRAPH_OUTPUT="${DATA_ROOT}/_merged/oneformer3d/navgraph"
+
+        if [ ! -f "$LABELED_PLY" ]; then
+            echo "Error: labeled.ply no encontrado en ${LABELED_PLY}"
+            exit 1
+        fi
+
+        uv run "${SCRIPT_DIR}/../scripts/oneformer3d2navgraph.py" \
+            --input "$LABELED_PLY" \
+            --output-dir "$NAVGRAPH_OUTPUT" \
+            --voxel-size "$NAVGRAPH_VOXEL_SIZE" \
+            --min-zone-area "$NAVGRAPH_MIN_AREA"
     fi
 
     echo ""
@@ -428,6 +509,73 @@ if [ "$DO_ACE" -eq 1 ]; then
     "$ACE_RUN_SH" "${ace_args[@]}"
 fi
 
+# --- STEP 5: OneFormer3D 3D semantic segmentation ---
+if [ "$DO_ONEFORMER3D" -eq 1 ]; then
+    echo ""
+    echo "[Paso 5] Segmentación semántica 3D (OneFormer3D)"
+
+    ONEFORMER_SH="${SCRIPT_DIR}/../run-oneformer3d.sh"
+    if [ ! -f "$ONEFORMER_SH" ]; then
+        echo "Error: no se encontró ${ONEFORMER_SH}"
+        exit 1
+    fi
+
+    # Determine target directory (merged or single series)
+    if [ "$DO_MERGE" -eq 1 ] && [ "${#SERIES_NAMES[@]}" -ge 2 ]; then
+        ONEFORMER_TARGET="${DATA_ROOT}/_merged"
+    else
+        ONEFORMER_TARGET="${DATA_ROOT}/${SERIES_NAMES[0]}"
+    fi
+
+    oneformer_args=(--data-dir "$ONEFORMER_TARGET")
+    [ -n "$ONEFORMER3D_CHECKPOINT" ] && oneformer_args+=(--checkpoint "$ONEFORMER3D_CHECKPOINT")
+    [ -n "$ONEFORMER3D_CONFIG" ] && oneformer_args+=(--config "$ONEFORMER3D_CONFIG")
+    [ "$FORCE_CPU" -eq 1 ] && oneformer_args+=(--cpu)
+
+    echo "  Target: ${ONEFORMER_TARGET}"
+    "$ONEFORMER_SH" "${oneformer_args[@]}"
+fi
+
+# --- STEP 6: Navigation Graph generation ---
+if [ "$DO_NAVGRAPH" -eq 1 ]; then
+    echo ""
+    echo "[Paso 6] Generación de grafo de navegación"
+
+    # Determine target directory (same as OneFormer3D target)
+    if [ "$DO_MERGE" -eq 1 ] && [ "${#SERIES_NAMES[@]}" -ge 2 ]; then
+        NAVGRAPH_TARGET="${DATA_ROOT}/_merged"
+    else
+        NAVGRAPH_TARGET="${DATA_ROOT}/${SERIES_NAMES[0]}"
+    fi
+
+    LABELED_PLY="${NAVGRAPH_TARGET}/oneformer3d/output/labeled.ply"
+    NAVGRAPH_OUTPUT="${NAVGRAPH_TARGET}/oneformer3d/navgraph"
+
+    if [ ! -f "$LABELED_PLY" ]; then
+        echo "Error: labeled.ply no encontrado en ${LABELED_PLY}"
+        echo "Asegúrate de que OneFormer3D se ejecutó correctamente."
+        exit 1
+    fi
+
+    if ! command -v uv >/dev/null 2>&1; then
+        echo "Error: 'uv' no encontrado. Instálalo desde https://docs.astral.sh/uv/"
+        exit 1
+    fi
+
+    echo "  Input : ${LABELED_PLY}"
+    echo "  Output: ${NAVGRAPH_OUTPUT}/"
+
+    uv run "${SCRIPT_DIR}/../scripts/oneformer3d2navgraph.py" \
+        --input "$LABELED_PLY" \
+        --output-dir "$NAVGRAPH_OUTPUT" \
+        --voxel-size "$NAVGRAPH_VOXEL_SIZE" \
+        --min-zone-area "$NAVGRAPH_MIN_AREA"
+
+    echo ""
+    echo "  NavGraph generado en: ${NAVGRAPH_OUTPUT}/"
+    echo "  Edita zone_labels.json para asignar nombres semánticos a las zonas."
+fi
+
 echo ""
 echo "========================================"
 echo " Pipeline completado"
@@ -435,4 +583,6 @@ echo "========================================"
 echo "Series procesadas : ${SERIES_NAMES[*]}"
 [ "$DO_MERGE" -eq 1 ] && echo "Merge             : ${DATA_ROOT}/_merged/"
 [ "$DO_ACE" -eq 1 ] && echo "Modelo ACE        : ${DATA_ROOT}/output/"
+[ "$DO_ONEFORMER3D" -eq 1 ] && echo "OneFormer3D       : segmentación completada"
+[ "$DO_NAVGRAPH" -eq 1 ] && echo "NavGraph          : grafo de navegación generado"
 echo "========================================"
