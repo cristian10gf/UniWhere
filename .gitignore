@@ -1,6 +1,9 @@
 .cursor/
 .agents/
 skills-*
+.github/agents/
+.github/prompts/
+
 
 .vscode/
 .idea/
