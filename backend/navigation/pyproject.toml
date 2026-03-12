@@ -1,0 +1,15 @@
+[project]
+name = "uniwhere-navigation"
+version = "0.1.0"
+description = "Topological and geometric route planning over 3D-segmented campus models"
+requires-python = ">=3.10"
+dependencies = [
+    "networkx",
+    "scipy",
+    "numpy",
+    "open3d",
+    "trimesh",
+]
+
+[dependency-groups]
+dev = []
