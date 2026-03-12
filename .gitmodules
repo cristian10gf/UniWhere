@@ -1,5 +1,5 @@
 [submodule "backend/seguimiento/oneformer3d"]
-	path = backend/seguimiento/oneformer3d
+	path = preprocesamiento/models/oneformer3d
 	url = git@github.com:cristian10gf/oneformer3d.git
 	branch = main
 [submodule "preprocesamiento/VideoFrameExtractor"]
