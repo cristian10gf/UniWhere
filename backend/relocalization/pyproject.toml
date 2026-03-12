@@ -1,0 +1,14 @@
+[project]
+name = "uniwhere-relocalization"
+version = "0.1.0"
+description = "ACE-based visual relocalization using OpenCV PnP+RANSAC for 6DoF pose estimation"
+requires-python = ">=3.10"
+dependencies = [
+    "torch",
+    "torchvision",
+    "opencv-python-headless",
+    "numpy",
+]
+
+[dependency-groups]
+dev = []
