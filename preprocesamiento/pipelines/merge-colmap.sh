@@ -37,6 +37,16 @@ Requisitos:
   - Las imagenes deben tener nombres unicos entre series (prefijo de serie)
   - Para vocab_tree_matcher: descargar vocab_tree y especificarlo con --vocab-tree
     (https://demuc.de/colmap/)
+
+Nota OneFormer3D:
+  Si planeas ejecutar OneFormer3D tras el merge para segmentacion semantica 3D,
+  asegurate de incluir --with-dense para generar fused.ply (nube de puntos densa).
+  Sin la reconstruccion densa, OneFormer3D no tendra entrada valida.
+
+  Ejemplo:
+    ./merge-colmap.sh serie-1 serie-2 --with-dense
+    # Equivalente con pipeline.sh:
+    ./pipeline.sh --merge-only serie-1 serie-2 --with-dense --run-oneformer3d
 EOF
 }
 
