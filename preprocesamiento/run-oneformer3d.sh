@@ -94,14 +94,29 @@ if [ -z "$CHECKPOINT" ]; then
 fi
 
 if [ ! -f "$CHECKPOINT" ]; then
-    echo "Error: checkpoint no encontrado: ${CHECKPOINT}"
+    CHECKPOINT_URL="https://github.com/oneformer3d/oneformer3d/releases/download/v1.0/oneformer3d_1xb2_s3dis-area-5.pth"
+    CHECKPOINT_DIR="$(dirname "$CHECKPOINT")"
+
+    echo "Checkpoint no encontrado: ${CHECKPOINT}"
+    echo "Descargando desde GitHub releases..."
+    echo "  URL   : ${CHECKPOINT_URL}"
+    echo "  Destino: ${CHECKPOINT}"
     echo ""
-    echo "Descarga el checkpoint de S3DIS y colócalo en:"
-    echo "  ${SCRIPT_DIR}/data/weights/oneformer3d/s3dis.pth"
+
+    mkdir -p "$CHECKPOINT_DIR"
+
+    if command -v wget >/dev/null 2>&1; then
+        wget --show-progress -O "$CHECKPOINT" "$CHECKPOINT_URL"
+    elif command -v curl >/dev/null 2>&1; then
+        curl -L --progress-bar -o "$CHECKPOINT" "$CHECKPOINT_URL"
+    else
+        echo "Error: se necesita 'wget' o 'curl' para descargar el checkpoint."
+        exit 1
+    fi
+
     echo ""
-    echo "Puedes descargarlo desde el repositorio de OneFormer3D:"
-    echo "  https://github.com/oneformer3d/oneformer3d#pretrained-models"
-    exit 1
+    echo "Checkpoint descargado: ${CHECKPOINT}"
+    echo ""
 fi
 
 # Output paths
@@ -159,10 +174,14 @@ fi
 # --- Step 2: OneFormer3D inference ---
 echo "── Paso 2: OneFormer3D inferencia ──"
 
+CHECKPOINT_DIR="$(dirname "$CHECKPOINT")"
+CHECKPOINT_BASENAME="$(basename "$CHECKPOINT")"
+
 INFERENCE_ARGS=(
     --input "$SCENE_NPY"
     --output "$LABELED_PLY"
-    --checkpoint "$CHECKPOINT"
+    --weights-dir "$CHECKPOINT_DIR"
+    --checkpoint "/weights/${CHECKPOINT_BASENAME}"
     --config "$CONFIG"
     --voxel-size "$VOXEL_SIZE"
 )
