@@ -1,0 +1,46 @@
+{
+  "scene_dir": "C:\\Users\\crist\\Documents\\proyectos\\UniWhere\\preprocesamiento\\data\\block_g_1200",
+  "ace_dir": "C:\\Users\\crist\\Documents\\proyectos\\UniWhere\\preprocesamiento\\data\\block_g_1200\\ace",
+  "sparse_model_dir": "C:\\Users\\crist\\Documents\\proyectos\\UniWhere\\preprocesamiento\\data\\block_g_1200\\sparse\\0",
+  "ace_entries": 4,
+  "colmap_images": 4,
+  "matched_entries": 4,
+  "missing_stems": [],
+  "model_type_counts": {
+    "single_focal": 4,
+    "matrix": 0,
+    "unknown": 0
+  },
+  "translation_error_m": {
+    "count": 4,
+    "median": 2.792837557968483e-16,
+    "max": 1.897200693934436e-15
+  },
+  "rotation_error_deg": {
+    "count": 4,
+    "median": 0.0,
+    "max": 1.2074182697257333e-06
+  },
+  "pose_bottom_row_error": {
+    "count": 4,
+    "median": 0.0,
+    "max": 0.0
+  },
+  "focal_error_px": {
+    "count": 4,
+    "median": 0.0,
+    "max": 0.0
+  },
+  "matrix_error_abs": {
+    "count": 0,
+    "median": null,
+    "max": null
+  },
+  "calibration_shape_mismatches": [],
+  "pass": {
+    "all_ace_stems_found_in_colmap": true,
+    "calibration_shapes_consistent": true,
+    "translation_error_max_below_1e-6": true,
+    "rotation_error_max_below_1e-4_deg": true
+  }
+}
