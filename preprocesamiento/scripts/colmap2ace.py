@@ -14,6 +14,7 @@ import argparse
 import os
 import random
 import shutil
+import struct
 import subprocess
 import sys
 from pathlib import Path
@@ -152,23 +153,88 @@ def write_calibration(path, calib_value, calib_type):
                 f.write(values + '\n')
 
 
+def _read_bin_count(path):
+    """Read the leading uint64 entry count from a COLMAP binary model file."""
+    with open(path, 'rb') as f:
+        return int(struct.unpack('<Q', f.read(8))[0])
+
+
+def _count_text_entries(path, kind):
+    """Count entries in COLMAP text model files."""
+    with open(path) as f:
+        lines = [line.strip() for line in f if line.strip() and not line.startswith('#')]
+
+    if kind == 'images':
+        return len(lines) // 2
+    return len(lines)
+
+
+def _get_sparse_model_stats(model_dir):
+    """Collect comparable stats for one sparse submodel directory."""
+    cameras_txt = model_dir / 'cameras.txt'
+    images_txt = model_dir / 'images.txt'
+    points_txt = model_dir / 'points3D.txt'
+
+    cameras_bin = model_dir / 'cameras.bin'
+    images_bin = model_dir / 'images.bin'
+    points_bin = model_dir / 'points3D.bin'
+
+    has_camera = cameras_txt.exists() or cameras_bin.exists()
+    has_images = images_txt.exists() or images_bin.exists()
+    if not (has_camera and has_images):
+        return None
+
+    num_images = 0
+    num_points = 0
+
+    if images_bin.exists():
+        num_images = _read_bin_count(images_bin)
+    elif images_txt.exists():
+        num_images = _count_text_entries(images_txt, kind='images')
+
+    if points_bin.exists():
+        num_points = _read_bin_count(points_bin)
+    elif points_txt.exists():
+        num_points = _count_text_entries(points_txt, kind='points')
+
+    return {
+        'path': model_dir,
+        'name': model_dir.name,
+        'num_images': num_images,
+        'num_points': num_points,
+        'has_text': cameras_txt.exists() and images_txt.exists(),
+    }
+
+
+def _select_best_sparse_submodel(colmap_dir):
+    """Select the sparse submodel with the highest reconstruction coverage."""
+    sparse_root = Path(colmap_dir) / 'sparse'
+    if not sparse_root.exists():
+        raise FileNotFoundError(f"No sparse reconstruction found in {colmap_dir}/sparse/.")
+
+    candidate_dirs = [d for d in sorted(sparse_root.iterdir()) if d.is_dir()]
+    candidates = []
+    for model_dir in candidate_dirs:
+        stats = _get_sparse_model_stats(model_dir)
+        if stats is not None:
+            candidates.append(stats)
+
+    if not candidates:
+        raise FileNotFoundError(
+            f"No sparse reconstruction found in {colmap_dir}/sparse/. Run COLMAP first."
+        )
+
+    best = max(candidates, key=lambda c: (c['num_images'], c['num_points']))
+    print(
+        f"Selected sparse model '{best['name']}' "
+        f"({best['num_images']} registered images, {best['num_points']} points3D)."
+    )
+    return best['path']
+
+
 def ensure_text_format(colmap_dir):
     """Run colmap model_converter if sparse output is in binary format."""
-    sparse_dir = Path(colmap_dir) / 'sparse' / '0'
-
-    if (sparse_dir / 'cameras.txt').exists() and (sparse_dir / 'images.txt').exists():
-        return sparse_dir
-
-    if not (sparse_dir / 'cameras.bin').exists():
-        for subdir in sorted((Path(colmap_dir) / 'sparse').iterdir()):
-            if (subdir / 'cameras.bin').exists() or (subdir / 'cameras.txt').exists():
-                sparse_dir = subdir
-                break
-        else:
-            raise FileNotFoundError(
-                f"No sparse reconstruction found in {colmap_dir}/sparse/. "
-                "Run COLMAP first."
-            )
+    sparse_dir = _select_best_sparse_submodel(colmap_dir)
 
     if (sparse_dir / 'cameras.txt').exists() and (sparse_dir / 'images.txt').exists():
         return sparse_dir
