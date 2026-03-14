@@ -6,6 +6,7 @@ requires-python = ">=3.10"
 dependencies = [
     "rerun-sdk",
     "torch",
+    "torchvision",
     "numpy",
     "opencv-python",
     "scikit-image",
