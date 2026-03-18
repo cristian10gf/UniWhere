@@ -2,6 +2,33 @@
 
 Este proyecto deja un wrapper para ejecutar COLMAP de forma consistente sobre las series de imagenes guardadas en [preprocesamiento/data](../preprocesamiento/data).
 
+Desde marzo de 2026, el pipeline principal usa MASt3R por defecto (`--reconstructor mast3r`) y COLMAP queda como fallback explicito de compatibilidad (`--reconstructor colmap`).
+
+Este documento cubre el camino COLMAP para fallback, recuperacion y comparativas A/B.
+
+## Convivencia con MASt3R en el pipeline
+
+Ejecutar una corrida completa forzando COLMAP:
+
+```bash
+cd preprocesamiento/pipelines
+./pipeline.sh --series campus-norte.mp4 --merge --run-ace --reconstructor colmap
+```
+
+Serie ya extraida (sin paso de videos):
+
+```bash
+./pipeline.sh --series-names block_g_1200 --reconstructor colmap
+```
+
+El contrato de salida se mantiene igual que MASt3R:
+
+```text
+data/<serie>/database.db
+data/<serie>/sparse/0/{cameras,images,points3D}.{txt|bin}
+data/<serie>/dense/0/fused.ply
+```
+
 ## Estructura esperada
 
 Cada serie debe vivir dentro de su propia carpeta y las imagenes deben quedar en una subcarpeta llamada images.
@@ -129,6 +156,12 @@ Tambien puedes pedirle al wrapper que lo haga antes de correr:
 - Docker instalado.
 - Si quieres aceleracion densa con GPU, Docker debe tener acceso a NVIDIA.
 - La serie debe existir en [preprocesamiento/data](../preprocesamiento/data) con una subcarpeta images.
+
+## Cuándo usar fallback COLMAP
+
+- Si MASt3R falla en una escena particular.
+- Si necesitas `vocab_tree_matcher` exacto en merge multi-serie.
+- Si quieres comparar calidad de pose MASt3R vs COLMAP con el mismo downstream ACE.
 
 ## Visualizacion con CloudCompare
 

@@ -1,6 +1,8 @@
-# Pipeline COLMAP + ACE en UniWhere
+# Pipeline MASt3R (default) + COLMAP (fallback) + ACE en UniWhere
 
-Este documento describe las herramientas creadas para integrar la reconstruccion 3D (COLMAP) con la relocalizacion visual (ACE) en un flujo de trabajo unificado.
+Este documento describe el flujo unificado de UniWhere para reconstruccion 3D y relocalizacion visual.
+
+Desde marzo de 2026, el pipeline usa MASt3R por defecto y mantiene COLMAP como fallback explicito para compatibilidad y recuperacion.
 
 ## Arquitectura general
 
@@ -14,19 +16,22 @@ VideoFrameExtractor (extraccion de frames con prefijo de serie)
 data/<serie>/images/  (frames: serie__frame000001.jpg, ...)
     |
     v
-run-parallel-colmap.sh (COLMAP en paralelo por serie)
+pipeline.sh --reconstructor mast3r|colmap (default: mast3r)
     |
     v
-data/<serie>/sparse/0/ + database.db  (features, matches, reconstruccion sparse)
+run-parallel-mast3r.sh / run-parallel-colmap.sh
     |
     v
-merge-colmap.sh (database_merger + cross-match + mapper unificado)
+data/<serie>/sparse/0/ + database.db + dense/0/fused.ply
     |
     v
-data/_merged/sparse/0/ + database.db  (reconstruccion unificada)
+merge-mast3r.sh / merge-colmap.sh
     |
     v
-colmap2ace.py (conversion de formato)
+data/_merged/sparse/0/ + database.db + dense/0/fused.ply
+  |
+  v
+colmap2ace.py (contrato de entrada compatible COLMAP)
     |
     v
 data/_merged/ace/{train,test}/{rgb,poses,calibration}/  (dataset ACE)
@@ -44,7 +49,10 @@ Todo el flujo se puede ejecutar con un solo comando usando `pipeline.sh`, o paso
 
 | Herramienta | Ubicacion | Funcion |
 |---|---|---|
-| Pipeline completo | [preprocesamiento/pipelines/pipeline.sh](../preprocesamiento/pipelines/pipeline.sh) | Orquestador end-to-end: video -> frames -> COLMAP -> merge -> ACE |
+| Pipeline completo | [preprocesamiento/pipelines/pipeline.sh](../preprocesamiento/pipelines/pipeline.sh) | Orquestador end-to-end: video -> frames -> reconstruccion -> merge -> ACE |
+| MASt3R shortcut | [preprocesamiento/run-mast3r.sh](../preprocesamiento/run-mast3r.sh) | Wrapper de conveniencia para MASt3R |
+| MASt3R paralelo | [preprocesamiento/pipelines/run-parallel-mast3r.sh](../preprocesamiento/pipelines/run-parallel-mast3r.sh) | Ejecutar MASt3R sobre multiples series en paralelo |
+| Merge MASt3R | [preprocesamiento/pipelines/merge-mast3r.sh](../preprocesamiento/pipelines/merge-mast3r.sh) | Merge MASt3R a `_merged` manteniendo contratos finales |
 | COLMAP paralelo | [preprocesamiento/pipelines/run-parallel-colmap.sh](../preprocesamiento/pipelines/run-parallel-colmap.sh) | Ejecutar COLMAP sobre multiples series en paralelo |
 | Merge COLMAP | [preprocesamiento/pipelines/merge-colmap.sh](../preprocesamiento/pipelines/merge-colmap.sh) | Merge hibrido de reconstrucciones COLMAP |
 | Conversor COLMAP a ACE | [preprocesamiento/scripts/colmap2ace.py](../preprocesamiento/scripts/colmap2ace.py) | Convertir salida sparse de COLMAP al formato de dataset ACE |
@@ -59,7 +67,7 @@ Todo el flujo se puede ejecutar con un solo comando usando `pipeline.sh`, o paso
 - [uv](https://docs.astral.sh/uv/) instalado (gestor de paquetes Python).
 - `videoframeextractor` instalado como tool de uv (ver mas abajo).
 - ffmpeg instalado en el host (necesario para VideoFrameExtractor y para detectar dimensiones de video).
-- Imagenes Docker de COLMAP y ACE construidas.
+- Imagenes Docker de MASt3R, COLMAP y ACE construidas.
 - Python 3 con `numpy` y `scipy` (para `colmap2ace.py`).
 
 Todas las dependencias se pueden instalar de una vez con el script de instalacion:
@@ -67,6 +75,8 @@ Todas las dependencias se pueden instalar de una vez con el script de instalacio
 ```bash
 ./scripts/install_tools.sh
 ```
+
+Este instalador tambien descarga el peso principal de MASt3R y construye la imagen `mast3r-pipeline:latest` cuando Docker esta disponible.
 
 A continuacion se detalla cada paso si prefieres hacerlo manualmente.
 
@@ -127,6 +137,20 @@ docker pull colmap/colmap:latest
 
 Los scripts (`run-series.sh`, `run-parallel-colmap.sh`, `merge-colmap.sh`) detectan automaticamente si existe `colmap:latest` local o descargan `colmap/colmap:latest`.
 
+### Peso e imagen Docker de MASt3R
+
+El instalador descarga el checkpoint principal de MASt3R en:
+
+```text
+preprocesamiento/data/weights/mast3r/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric.pth
+```
+
+Y construye la imagen de integracion:
+
+```bash
+docker build -f preprocesamiento/models/mast3r-integration/docker/Dockerfile -t mast3r-pipeline:latest .
+```
+
 ### Descargar pesos de ACE
 
 ```bash
@@ -175,7 +199,7 @@ Los videos se buscan por defecto en `preprocesamiento/videos/`.
 ```bash
 cd preprocesamiento/pipelines
 
-# Pipeline completo: video -> frames -> COLMAP -> merge -> ACE
+# Pipeline completo: video -> frames -> reconstruccion -> merge -> ACE
 ./pipeline.sh \
   --series campus-norte.mp4 campus-sur.mp4 campus-este.mp4 \
   --merge \
@@ -189,6 +213,9 @@ cd preprocesamiento/pipelines
 
 # Solo video -> frames -> COLMAP (sin merge ni ACE)
 ./pipeline.sh --series video1.mp4
+
+# Forzar fallback COLMAP explicito
+./pipeline.sh --series video1.mp4 --reconstructor colmap
 ```
 
 El pipeline detecta automaticamente las dimensiones de cada video con `ffprobe` y las pasa a `videoframeextractor` con `-w` y `-H`, de modo que los frames mantienen la resolucion original sin redimensionar ni agregar padding. Esto es importante para que COLMAP trabaje con la geometria real de la camara. Se usa GPU por defecto para la decodificacion (`--gpu`).
@@ -209,15 +236,16 @@ El pipeline detecta automaticamente las dimensiones de cada video con `ffprobe` 
 
 | Opcion | Default | Descripcion |
 |---|---|---|
+| `--reconstructor TYPE` | mast3r | Reconstructor: `mast3r` o `colmap` |
 | `--videos-dir PATH` | `preprocesamiento/videos` | Carpeta con videos de entrada |
 | `--series FILE [...]` | | Videos a procesar (relativos a --videos-dir) |
 | `--series-names NAME [...]` | | Series ya extraidas (sin extraccion de frames) |
 | `--sample-fps FPS` | 2 | FPS de muestreo para extraccion |
-| `--max-parallel N` | 1 | Maximo de COLMAPs en paralelo |
-| `--colmap-mode MODE` | advanced | Modo COLMAP: `automatic` o `advanced` |
-| `--merge` | (desactivado) | Ejecutar merge tras COLMAP individual |
-| `--merge-only S [...]` | | Solo merge (sin extraccion ni COLMAP) |
-| `--matcher TYPE` | vocab_tree | Matcher para cross-serie: `vocab_tree` o `exhaustive` |
+| `--max-parallel N` | 1 | Maximo de reconstrucciones en paralelo |
+| `--colmap-mode MODE` | advanced | Modo heredado: `automatic` o `advanced` |
+| `--merge` | (desactivado) | Ejecutar merge tras reconstruccion individual |
+| `--merge-only S [...]` | | Solo merge (sin extraccion ni reconstruccion) |
+| `--matcher TYPE` | vocab_tree | Matcher heredado (mapeado segun reconstructor) |
 | `--vocab-tree PATH` | | Ruta al vocabulary tree |
 | `--run-ace` | (desactivado) | Ejecutar conversion + entrenamiento ACE |
 | `--ace-only PATH` | | Solo ACE sobre datos ya convertidos |
@@ -225,6 +253,41 @@ El pipeline detecta automaticamente las dimensiones de cada video con `ffprobe` 
 | `--cpu` | (desactivado) | Forzar modo CPU en todos los pasos |
 
 La extraccion de frames usa `videoframeextractor` (instalado como tool de uv) con GPU y las dimensiones nativas de cada video (detectadas via `ffprobe`).
+
+## Matriz de compatibilidad de parametros (COLMAP -> MASt3R)
+
+Cuando `--reconstructor mast3r` se usan parametros heredados para mantener la misma interfaz operativa:
+
+| Parametro heredado | MASt3R | Regla |
+|---|---|---|
+| `--colmap-mode automatic|advanced` | `--mode automatic|advanced` | Equivalente directo |
+| `--matcher sequential|exhaustive` | `--matcher` MASt3R | Equivalente directo |
+| `--matcher vocab_tree` | `--matcher exhaustive` | Aproximacion con warning controlado |
+| `--max-parallel N` | `--max-parallel N` | Equivalente directo |
+| `--cpu` | `--cpu` | Equivalente directo |
+| `-- ARGS...` | passthrough | Passthrough directo al runner MASt3R |
+
+## Contratos de salida mantenidos
+
+Para cada serie y para `_merged`, el reconstructor activo debe dejar:
+
+```text
+data/<target>/database.db
+data/<target>/sparse/0/{cameras,images,points3D}.{txt|bin}
+data/<target>/dense/0/fused.ply
+```
+
+Estos contratos son consumidos sin cambios por:
+
+- `colmap2ace.py` (entrada sparse compatible COLMAP)
+- OneFormer3D (`dense/0/fused.ply`)
+- NavGraph (sobre la salida de OneFormer3D)
+
+## Limites conocidos y fallback
+
+- El upstream de MASt3R indica que los wrappers SfM basados en COLMAP/GLOMAP son "toys" y pueden fallar en edge cases; el pipeline incorpora fallback explicito a COLMAP.
+- Si una serie falla con MASt3R, se recomienda reintentar con `--reconstructor colmap` para esa corrida.
+- En entornos sin GPU Docker, MASt3R y COLMAP pueden ejecutarse en CPU con `--cpu`, con mayor tiempo de proceso.
 
 ## 1. Ejecucion paralela de COLMAP
 

@@ -17,15 +17,17 @@ El sistema **no usa un mapa de puntos explícito** en inferencia — la escena e
 
 ---
 
-## Pipeline completo: COLMAP → ACE
+## Pipeline completo: reconstruccion compatible → ACE
 
 ```
-video → frames → COLMAP (SfM) → colmap2ace.py → ACE train → ACE test
+video → frames → MASt3R/COLMAP → colmap2ace.py → ACE train → ACE test
                                         ↓
                              data/<serie>/ace/{train,test}/{rgb,poses,calibration}/
 ```
 
-### Conversión COLMAP → ACE (`colmap2ace.py`)
+`colmap2ace.py` no depende del reconstructor original: consume un layout compatible COLMAP.
+
+### Conversión a ACE (`colmap2ace.py`)
 
 El script divide las imágenes COLMAP en train/test y convierte los formatos:
 
@@ -34,6 +36,15 @@ El script divide las imágenes COLMAP en train/test y convierte los formatos:
 | `images.bin` → pose W2C | `poses/<frame>.txt` → pose C2W (4×4, invertida) |
 | `cameras.bin` → intrínsecos | `calibration/<frame>.txt` → focal length (1 valor) |
 | `images/<frame>.jpg` | `rgb/<frame>.jpg` (copiado) |
+
+Contrato minimo esperado por escena (`data/<serie>` o `data/_merged`):
+
+```text
+images/
+sparse/0/{cameras,images,points3D}.{txt|bin}
+```
+
+Cuando la escena viene de MASt3R, ese contrato se exporta por el adaptador externo antes de ACE.
 
 **Convención de pose en ACE**: cámara-a-mundo (C2W), inversa de COLMAP (W2C). `colmap2ace.py` aplica la inversión automáticamente.
 
@@ -119,6 +130,13 @@ cd preprocesamiento/
 
 # Evaluar modelo concreto con sesión nombrada
 ./run-ace.sh test block_g_1200 ace/models/v1_produccion.pt --session v1_final
+
+# Flujo recomendado con pipeline (MASt3R por defecto)
+cd preprocesamiento/pipelines
+./pipeline.sh --series-names block_g_1200 --run-ace
+
+# Fallback explicito a COLMAP con el mismo paso ACE downstream
+./pipeline.sh --series-names block_g_1200 --run-ace --reconstructor colmap
 ```
 
 ### Salida del test
@@ -224,6 +242,12 @@ Procesó ~1000× menos datos que el default → nunca convergió.
 ---
 
 ## Notas técnicas
+
+### Compatibilidad MASt3R / COLMAP para ACE
+
+- ACE permanece sin cambios: el contrato de entrada lo mantiene `colmap2ace.py`.
+- MASt3R y COLMAP convergen al mismo layout de `images/` + `sparse/0/...`.
+- En validacion de no-regresion conviene comparar ambos reconstructores con el mismo `--train-ratio`.
 
 ### Detección de GPU
 
