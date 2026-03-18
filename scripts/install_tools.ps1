@@ -12,6 +12,11 @@ $VenvDir = Join-Path $ToolsDir 'videoframeextractor'
 $VfeToolName = 'videoframeextractor'
 $ColmapDir = Join-Path $RepoRoot 'preprocesamiento/models/colmap'
 $AceDir = Join-Path $RepoRoot 'preprocesamiento/models/ace'
+$Mast3rSubmoduleDir = Join-Path $RepoRoot 'preprocesamiento/models/mast3r'
+$Mast3rIntegrationDir = Join-Path $RepoRoot 'preprocesamiento/models/mast3r-integration'
+$Mast3rWeightsDir = Join-Path $RepoRoot 'preprocesamiento/data/weights/mast3r'
+$Mast3rMainWeightName = 'MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric.pth'
+$Mast3rMainWeightUrl = 'https://download.europe.naverlabs.com/ComputerVision/MASt3R/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric.pth'
 
 function Write-Info {
     param([string]$Message)
@@ -173,6 +178,61 @@ function Build-AceDocker {
     }
 }
 
+function Install-Mast3rWeights {
+    New-Item -ItemType Directory -Force -Path $Mast3rWeightsDir | Out-Null
+    $weightPath = Join-Path $Mast3rWeightsDir $Mast3rMainWeightName
+
+    if (Test-Path $weightPath) {
+        Write-Info "Peso MASt3R ya disponible: $weightPath"
+        return
+    }
+
+    Write-Info "Descargando peso MASt3R principal en $weightPath"
+    try {
+        Invoke-WebRequest -Uri $Mast3rMainWeightUrl -OutFile $weightPath
+        Write-Info "Peso MASt3R descargado: $weightPath"
+    }
+    catch {
+        Write-Info 'Advertencia: no se pudo descargar el peso MASt3R automáticamente.'
+        Write-Info "  URL: $Mast3rMainWeightUrl"
+        Write-Info "  Destino esperado: $weightPath"
+    }
+}
+
+function Build-Mast3rDocker {
+    if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
+        Write-Info 'Docker no está instalado. Omitiendo imagen MASt3R.'
+        return
+    }
+
+    $inspect = docker image inspect mast3r-pipeline:latest 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        Write-Info 'Imagen mast3r-pipeline:latest ya existe localmente'
+        return
+    }
+
+    $dockerfile = Join-Path $Mast3rIntegrationDir 'docker/Dockerfile'
+    if (-not (Test-Path $dockerfile)) {
+        Write-Info "Advertencia: no se encontró Dockerfile de MASt3R en $dockerfile. Omitiendo."
+        return
+    }
+
+    if (-not (Test-Path $Mast3rSubmoduleDir)) {
+        Write-Info "Advertencia: submódulo MASt3R no encontrado en $Mast3rSubmoduleDir"
+        Write-Info '  Ejecuta: git submodule update --init --recursive'
+        return
+    }
+
+    Write-Info "Construyendo imagen mast3r-pipeline:latest desde $dockerfile"
+    docker build -f $dockerfile -t mast3r-pipeline:latest $RepoRoot
+    if ($LASTEXITCODE -eq 0) {
+        Write-Info 'Imagen mast3r-pipeline:latest construida'
+    }
+    else {
+        throw 'Error al construir la imagen de MASt3R.'
+    }
+}
+
 if (-not (Test-Path $VfeDir)) {
     throw "No se encontró el directorio de VideoFrameExtractor en $VfeDir"
 }
@@ -188,5 +248,7 @@ Install-VideoFrameExtractor
 Install-CloudCompare
 Build-ColmapDocker
 Build-AceDocker
+Install-Mast3rWeights
+Build-Mast3rDocker
 
 Write-Info 'Instalación completada'

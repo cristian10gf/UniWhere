@@ -22,3 +22,7 @@
 	path = preprocesamiento/visualizadores/CloudCompare
 	url = git@github.com:CloudCompare/CloudCompare.git
 	branch = master
+[submodule "preprocesamiento/models/mast3r"]
+	path = preprocesamiento/models/mast3r
+	url = git@github.com:naver/mast3r.git
+	branch = main

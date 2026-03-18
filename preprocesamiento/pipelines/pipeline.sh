@@ -5,14 +5,14 @@ usage() {
     cat <<'EOF'
 Uso: ./pipeline.sh [opciones]
 
-Orquestador end-to-end: videos -> frames -> COLMAP -> merge -> ACE.
+Orquestador end-to-end: videos -> frames -> reconstruccion -> merge -> ACE.
 Ejecuta todo o partes del pipeline segun las opciones indicadas.
 
 Modos de ejecucion:
   Pipeline completo (video a ACE):
     ./pipeline.sh --series video1.mp4 video2.mp4 --merge --run-ace
 
-  Solo frames + COLMAP individual (sin merge ni ACE):
+    Solo frames + reconstruccion individual (sin merge ni ACE):
     ./pipeline.sh --series video1.mp4
 
   Solo merge de series ya procesadas:
@@ -23,6 +23,7 @@ Modos de ejecucion:
 
 Opciones generales:
   --data-root PATH         Carpeta base de datos (default: preprocesamiento/data)
+    --reconstructor TYPE     Reconstruccion: mast3r|colmap (default: mast3r)
   --cpu                    Forzar modo CPU en todos los pasos
   -h, --help               Mostrar esta ayuda
 
@@ -33,14 +34,20 @@ Opciones de extraccion de frames:
 
   Los frames se extraen con las dimensiones originales del video (sin redimensionar).
 
-Opciones de COLMAP:
-  --max-parallel N         Maximo de COLMAPs en paralelo (default: 1)
-  --colmap-mode MODE       Modo COLMAP: automatic|advanced (default: advanced)
+Opciones de reconstruccion:
+    --max-parallel N         Maximo de reconstrucciones en paralelo (default: 1)
+    --colmap-mode MODE       Modo heredado: automatic|advanced (default: advanced)
+                                                        - colmap: equivale a --mode
+                                                        - mast3r: mapeo directo a --mode
+    --matcher TYPE           Matcher heredado
+                                                        - colmap: vocab_tree|exhaustive
+                                                        - mast3r: sequential|exhaustive|vocab_tree
+                                                            (vocab_tree se aproxima a exhaustive con warning)
+    -- ARGS...               Argumentos extra para el reconstructor seleccionado
 
 Opciones de merge:
-  --merge                  Ejecutar merge de bases de datos tras COLMAP individual
-  --merge-only S [S...]    Solo merge (sin extraccion ni COLMAP individual)
-  --matcher TYPE           vocab_tree | exhaustive (default: vocab_tree)
+    --merge                  Ejecutar merge tras reconstruccion individual
+    --merge-only S [S...]    Solo merge (sin extraccion ni reconstruccion individual)
   --vocab-tree PATH        Ruta al vocabulary tree (relativa a data-root)
 
 Opciones de ACE:
@@ -66,7 +73,7 @@ Ejemplos:
   # Videos en otra carpeta
   ./pipeline.sh --videos-dir /ruta/a/videos --series campus-norte.mp4 --merge --run-ace
 
-  # COLMAP paralelo sobre series existentes (sin extraccion de frames)
+    # Reconstruccion paralela sobre series existentes (sin extraccion de frames)
   ./pipeline.sh --series-names serie-1 serie-2
 
   # Solo merge
@@ -86,6 +93,7 @@ EOF
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_ROOT=$(realpath "${SCRIPT_DIR}/../..")
 DATA_ROOT="${PROJECT_ROOT}/preprocesamiento/data"
+RECONSTRUCTOR="mast3r"
 FORCE_CPU=0
 
 # Frame extraction
@@ -97,6 +105,7 @@ SAMPLE_FPS=2
 MAX_PARALLEL=1
 COLMAP_MODE="advanced"
 SERIES_NAMES=()
+RECONSTRUCTOR_EXTRA_ARGS=()
 
 # Merge
 DO_MERGE=0
@@ -134,6 +143,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --data-root)
             DATA_ROOT="$2"
+            shift 2
+            ;;
+        --reconstructor)
+            RECONSTRUCTOR="$2"
             shift 2
             ;;
         --cpu)
@@ -231,6 +244,11 @@ while [[ $# -gt 0 ]]; do
             NAVGRAPH_MIN_AREA="$2"
             shift 2
             ;;
+        --)
+            shift
+            RECONSTRUCTOR_EXTRA_ARGS+=("$@")
+            break
+            ;;
         -*)
             echo "Error: opcion desconocida '$1'"
             echo ""
@@ -246,6 +264,24 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+case "$RECONSTRUCTOR" in
+    mast3r|colmap) ;;
+    *)
+        echo "Error: --reconstructor invalido '$RECONSTRUCTOR'. Usa mast3r o colmap."
+        exit 1
+        ;;
+esac
+
+if [ "$RECONSTRUCTOR" = "colmap" ]; then
+    case "$MATCHER" in
+        vocab_tree|exhaustive) ;;
+        *)
+            echo "Error: --matcher '$MATCHER' no es valido para colmap. Usa vocab_tree o exhaustive."
+            exit 1
+            ;;
+    esac
+fi
+
 DATA_ROOT=$(realpath "$DATA_ROOT")
 mkdir -p "$DATA_ROOT"
 
@@ -254,6 +290,47 @@ video_to_serie() {
     local filename
     filename=$(basename "$1")
     echo "${filename%.*}"
+}
+
+warn() {
+    echo "[WARN] $*" >&2
+}
+
+map_matcher_for_mast3r() {
+    local input_matcher="$1"
+    case "$input_matcher" in
+        sequential|exhaustive)
+            echo "$input_matcher"
+            ;;
+        vocab_tree)
+            warn "--matcher vocab_tree no tiene equivalente exacto en MASt3R; usando exhaustive."
+            echo "exhaustive"
+            ;;
+        *)
+            warn "--matcher '$input_matcher' no soportado por MASt3R; usando exhaustive."
+            echo "exhaustive"
+            ;;
+    esac
+}
+
+MAST3R_MATCHER=""
+if [ "$RECONSTRUCTOR" = "mast3r" ]; then
+    MAST3R_MATCHER=$(map_matcher_for_mast3r "$MATCHER")
+fi
+
+print_reconstructor_mapping() {
+    if [ "$RECONSTRUCTOR" != "mast3r" ]; then
+        return
+    fi
+
+    echo "Mapeo COLMAP -> MASt3R:"
+    echo "  --colmap-mode : equivalente directo (--mode ${COLMAP_MODE})"
+    echo "  --matcher     : ${MATCHER} -> ${MAST3R_MATCHER}"
+    echo "  --max-parallel: equivalente directo"
+    echo "  --cpu         : equivalente directo"
+    if [ ${#RECONSTRUCTOR_EXTRA_ARGS[@]} -gt 0 ]; then
+        echo "  -- args extra : passthrough directo (${#RECONSTRUCTOR_EXTRA_ARGS[@]} argumento(s))"
+    fi
 }
 
 # =============================================
@@ -299,13 +376,25 @@ if [ "$MERGE_ONLY" -eq 1 ]; then
     echo "========================================"
     echo " Pipeline: solo merge"
     echo "========================================"
+    echo "Reconstructor : ${RECONSTRUCTOR}"
     echo "Series       : ${MERGE_SERIES[*]}"
     echo ""
 
-    MERGE_SH="${SCRIPT_DIR}/merge-colmap.sh"
-    merge_args=("${MERGE_SERIES[@]}" --data-root "$DATA_ROOT" --matcher "$MATCHER")
-    [ -n "$VOCAB_TREE" ] && merge_args+=(--vocab-tree "$VOCAB_TREE")
-    [ "$FORCE_CPU" -eq 1 ] && merge_args+=(--cpu)
+    if [ "$RECONSTRUCTOR" = "mast3r" ]; then
+        print_reconstructor_mapping
+        MERGE_SH="${SCRIPT_DIR}/merge-mast3r.sh"
+        merge_args=("${MERGE_SERIES[@]}" --data-root "$DATA_ROOT" --mode "$COLMAP_MODE" --matcher "$MAST3R_MATCHER")
+        [ "$FORCE_CPU" -eq 1 ] && merge_args+=(--cpu)
+        if [ ${#RECONSTRUCTOR_EXTRA_ARGS[@]} -gt 0 ]; then
+            merge_args+=(--)
+            merge_args+=("${RECONSTRUCTOR_EXTRA_ARGS[@]}")
+        fi
+    else
+        MERGE_SH="${SCRIPT_DIR}/merge-colmap.sh"
+        merge_args=("${MERGE_SERIES[@]}" --data-root "$DATA_ROOT" --matcher "$MATCHER")
+        [ -n "$VOCAB_TREE" ] && merge_args+=(--vocab-tree "$VOCAB_TREE")
+        [ "$FORCE_CPU" -eq 1 ] && merge_args+=(--cpu)
+    fi
 
     "$MERGE_SH" "${merge_args[@]}"
 
@@ -363,7 +452,7 @@ if [ "$MERGE_ONLY" -eq 1 ]; then
 fi
 
 # =============================================
-# Full pipeline: frames -> COLMAP -> merge -> ACE
+# Full pipeline: frames -> reconstruction -> merge -> ACE
 # =============================================
 
 echo "========================================"
@@ -449,16 +538,32 @@ if [ ${#SERIES_NAMES[@]} -eq 0 ]; then
     exit 1
 fi
 
-# --- STEP 2: COLMAP parallel ---
-echo "[Paso 2] COLMAP paralelo"
+# --- STEP 2: Reconstructor parallel ---
+echo "[Paso 2] Reconstruccion paralela"
+echo "  Reconstructor: $RECONSTRUCTOR"
 echo "  Series      : ${SERIES_NAMES[*]}"
 echo "  Max paralelo: $MAX_PARALLEL"
 echo "  Modo        : $COLMAP_MODE"
 echo ""
 
-PARALLEL_SH="${SCRIPT_DIR}/run-parallel-colmap.sh"
-colmap_args=("${SERIES_NAMES[@]}" --max-parallel "$MAX_PARALLEL" --mode "$COLMAP_MODE" --data-root "$DATA_ROOT")
-[ "$FORCE_CPU" -eq 1 ] && colmap_args+=(--cpu)
+if [ "$RECONSTRUCTOR" = "mast3r" ]; then
+    print_reconstructor_mapping
+    PARALLEL_SH="${SCRIPT_DIR}/run-parallel-mast3r.sh"
+    colmap_args=("${SERIES_NAMES[@]}" --max-parallel "$MAX_PARALLEL" --mode "$COLMAP_MODE" --data-root "$DATA_ROOT" --matcher "$MAST3R_MATCHER")
+    [ "$FORCE_CPU" -eq 1 ] && colmap_args+=(--cpu)
+    if [ ${#RECONSTRUCTOR_EXTRA_ARGS[@]} -gt 0 ]; then
+        colmap_args+=(--)
+        colmap_args+=("${RECONSTRUCTOR_EXTRA_ARGS[@]}")
+    fi
+else
+    PARALLEL_SH="${SCRIPT_DIR}/run-parallel-colmap.sh"
+    colmap_args=("${SERIES_NAMES[@]}" --max-parallel "$MAX_PARALLEL" --mode "$COLMAP_MODE" --data-root "$DATA_ROOT")
+    [ "$FORCE_CPU" -eq 1 ] && colmap_args+=(--cpu)
+    if [ ${#RECONSTRUCTOR_EXTRA_ARGS[@]} -gt 0 ]; then
+        colmap_args+=(--)
+        colmap_args+=("${RECONSTRUCTOR_EXTRA_ARGS[@]}")
+    fi
+fi
 
 "$PARALLEL_SH" "${colmap_args[@]}"
 
@@ -467,10 +572,20 @@ if [ "$DO_MERGE" -eq 1 ] && [ "${#SERIES_NAMES[@]}" -ge 2 ]; then
     echo ""
     echo "[Paso 3] Merge de series"
 
-    MERGE_SH="${SCRIPT_DIR}/merge-colmap.sh"
-    merge_args=("${SERIES_NAMES[@]}" --data-root "$DATA_ROOT" --matcher "$MATCHER")
-    [ -n "$VOCAB_TREE" ] && merge_args+=(--vocab-tree "$VOCAB_TREE")
-    [ "$FORCE_CPU" -eq 1 ] && merge_args+=(--cpu)
+    if [ "$RECONSTRUCTOR" = "mast3r" ]; then
+        MERGE_SH="${SCRIPT_DIR}/merge-mast3r.sh"
+        merge_args=("${SERIES_NAMES[@]}" --data-root "$DATA_ROOT" --mode "$COLMAP_MODE" --matcher "$MAST3R_MATCHER")
+        [ "$FORCE_CPU" -eq 1 ] && merge_args+=(--cpu)
+        if [ ${#RECONSTRUCTOR_EXTRA_ARGS[@]} -gt 0 ]; then
+            merge_args+=(--)
+            merge_args+=("${RECONSTRUCTOR_EXTRA_ARGS[@]}")
+        fi
+    else
+        MERGE_SH="${SCRIPT_DIR}/merge-colmap.sh"
+        merge_args=("${SERIES_NAMES[@]}" --data-root "$DATA_ROOT" --matcher "$MATCHER")
+        [ -n "$VOCAB_TREE" ] && merge_args+=(--vocab-tree "$VOCAB_TREE")
+        [ "$FORCE_CPU" -eq 1 ] && merge_args+=(--cpu)
+    fi
 
     "$MERGE_SH" "${merge_args[@]}"
 fi
@@ -580,6 +695,7 @@ echo ""
 echo "========================================"
 echo " Pipeline completado"
 echo "========================================"
+echo "Reconstructor     : ${RECONSTRUCTOR}"
 echo "Series procesadas : ${SERIES_NAMES[*]}"
 [ "$DO_MERGE" -eq 1 ] && echo "Merge             : ${DATA_ROOT}/_merged/"
 [ "$DO_ACE" -eq 1 ] && echo "Modelo ACE        : ${DATA_ROOT}/output/"

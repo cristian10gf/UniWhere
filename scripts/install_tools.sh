@@ -10,6 +10,11 @@ VENV_DIR="$TOOLS_DIR/videoframeextractor"
 VFE_TOOL_NAME="videoframeextractor"
 COLMAP_DIR="$REPO_ROOT/preprocesamiento/models/colmap"
 ACE_DIR="$REPO_ROOT/preprocesamiento/models/ace"
+MAST3R_SUBMODULE_DIR="$REPO_ROOT/preprocesamiento/models/mast3r"
+MAST3R_INTEGRATION_DIR="$REPO_ROOT/preprocesamiento/models/mast3r-integration"
+MAST3R_WEIGHTS_DIR="$REPO_ROOT/preprocesamiento/data/weights/mast3r"
+MAST3R_MAIN_WEIGHT_NAME="MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric.pth"
+MAST3R_MAIN_WEIGHT_URL="https://download.europe.naverlabs.com/ComputerVision/MASt3R/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric.pth"
 
 log() {
     printf '[INFO] %s\n' "$1"
@@ -18,6 +23,23 @@ log() {
 fail() {
     printf '[ERROR] %s\n' "$1" >&2
     exit 1
+}
+
+download_to_file() {
+    local url="$1"
+    local output_path="$2"
+
+    if command -v wget >/dev/null 2>&1; then
+        wget -q --show-progress -O "$output_path" "$url"
+        return 0
+    fi
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -L -o "$output_path" "$url"
+        return 0
+    fi
+
+    return 1
 }
 
 require_python312() {
@@ -191,6 +213,55 @@ build_ace_docker() {
     fi
 }
 
+install_mast3r_weights() {
+    local weight_path="$MAST3R_WEIGHTS_DIR/$MAST3R_MAIN_WEIGHT_NAME"
+
+    mkdir -p "$MAST3R_WEIGHTS_DIR"
+
+    if [[ -f "$weight_path" ]]; then
+        log "Peso MASt3R ya disponible: $weight_path"
+        return 0
+    fi
+
+    log "Descargando peso MASt3R principal en $weight_path"
+    if ! download_to_file "$MAST3R_MAIN_WEIGHT_URL" "$weight_path"; then
+        log "Advertencia: no se pudo descargar el peso MASt3R automáticamente."
+        log "  URL: $MAST3R_MAIN_WEIGHT_URL"
+        log "  Destino esperado: $weight_path"
+        return 0
+    fi
+
+    log "Peso MASt3R descargado: $weight_path"
+}
+
+build_mast3r_docker() {
+    if ! command -v docker >/dev/null 2>&1; then
+        log "Docker no está instalado. Omitiendo imagen MASt3R."
+        return 0
+    fi
+
+    if docker image inspect mast3r-pipeline:latest >/dev/null 2>&1; then
+        log "Imagen mast3r-pipeline:latest ya existe localmente"
+        return 0
+    fi
+
+    local dockerfile="$MAST3R_INTEGRATION_DIR/docker/Dockerfile"
+    if [[ ! -f "$dockerfile" ]]; then
+        log "Advertencia: no se encontró Dockerfile de MASt3R en $dockerfile. Omitiendo."
+        return 0
+    fi
+
+    if [[ ! -d "$MAST3R_SUBMODULE_DIR" ]]; then
+        log "Advertencia: submódulo MASt3R no encontrado en $MAST3R_SUBMODULE_DIR."
+        log "  Ejecuta: git submodule update --init --recursive"
+        return 0
+    fi
+
+    log "Construyendo imagen mast3r-pipeline:latest desde $dockerfile"
+    docker build -f "$dockerfile" -t mast3r-pipeline:latest "$REPO_ROOT"
+    log "Imagen mast3r-pipeline:latest construida"
+}
+
 main() {
     [[ -d "$VFE_DIR" ]] || fail "No se encontró el directorio de VideoFrameExtractor en $VFE_DIR"
 
@@ -209,6 +280,8 @@ main() {
     install_cloudcompare
     build_colmap_docker
     build_ace_docker
+    install_mast3r_weights
+    build_mast3r_docker
 
     log "Instalación completada"
 }
