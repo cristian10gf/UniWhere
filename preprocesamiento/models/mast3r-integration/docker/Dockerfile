@@ -8,11 +8,20 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /opt/mast3r/dust3r
 COPY preprocesamiento/models/mast3r /opt/mast3r
+# Some workspaces keep `dust3r` as an uninitialized submodule; clone it if missing.
+RUN if [ ! -f /opt/mast3r/dust3r/requirements.txt ]; then \
+            rm -rf /opt/mast3r/dust3r && \
+            git clone --recursive https://github.com/naver/dust3r /opt/mast3r/dust3r; \
+        fi
+
+WORKDIR /opt/mast3r/dust3r
 RUN pip install -r requirements.txt
 RUN pip install -r requirements_optional.txt
 RUN pip install opencv-python==4.8.0.74
+
+WORKDIR /opt/mast3r/dust3r/croco/models/curope/
+RUN python setup.py build_ext --inplace
 
 WORKDIR /opt/mast3r
 RUN pip install -r requirements.txt

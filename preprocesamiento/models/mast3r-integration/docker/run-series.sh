@@ -12,21 +12,24 @@ compatible con el pipeline actual:
   - data/<serie>/dense/0/fused.ply
 
 Opciones:
-  --data-root PATH             Carpeta base de datasets (default: preprocesamiento/data)
-  --mode MODE                  automatic|advanced|shell (default: advanced)
-  --cpu                        Fuerza ejecucion sin GPU
-  --cpus N                     Numero de CPUs para Docker (default: todos)
-  --matcher TYPE               sequential|exhaustive|vocab_tree (default por modo)
-  --overlap N                  Overlap para matcher sequential (default: 20)
-  --model-name NAME            Modelo HF (default: MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric)
-  --weights PATH               Checkpoint local dentro del contenedor
-  --conf-thr FLOAT             Umbral de confianza (default: 1.001)
-  --pixel-tol N                Tolerancia pixel para matching denso (default: 0)
-  --dense-matching             Activa matching denso en MASt3R
-  --min-len-track N            Longitud minima de track (default: 5)
-  --skip-geometric-verification Saltar verify_matches
-  --use-glomap-mapper          Usar glomap mapper en vez de pycolmap mapper
-  -h, --help                   Muestra esta ayuda
+    --data-root PATH             Carpeta base de datasets (default: preprocesamiento/data)
+    --mode MODE                  automatic|advanced|shell (default: advanced)
+    --cpu                        Fuerza ejecucion sin GPU
+    --cpus N                     Numero de CPUs para Docker (default: auto, reserva 2 cores)
+    --threads N                  Hilos BLAS/OpenMP dentro del contenedor (default: igual a --cpus)
+    --shm-size SIZE              Shared memory Docker, ej: 16g (default: auto segun RAM host)
+    --matcher TYPE               sequential|exhaustive|vocab_tree (default por modo)
+    --overlap N                  Overlap para matcher sequential (default: 20)
+    --model-name NAME            Modelo HF (default: MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric)
+    --weights PATH               Checkpoint local dentro del contenedor (default: auto en /data/weights/mast3r)
+    --conf-thr FLOAT             Umbral de confianza (default: 1.001)
+    --pixel-tol N                Tolerancia pixel para matching denso (default: 0)
+    --dense-matching             Fuerza matching denso
+    --no-dense-matching          Desactiva matching denso
+    --min-len-track N            Longitud minima de track (default: 5)
+    --skip-geometric-verification Saltar verify_matches
+    --use-glomap-mapper          Usar glomap mapper en vez de pycolmap mapper
+    -h, --help                   Muestra esta ayuda
 
 Ejemplos:
   ./run-series.sh edificio-a
@@ -43,13 +46,15 @@ SERIE=""
 MODE="advanced"
 FORCE_CPU=0
 NUM_CPUS_OVERRIDE=""
+THREADS_OVERRIDE=""
+SHM_SIZE_OVERRIDE=""
 MATCHER=""
 OVERLAP=20
 MODEL_NAME="MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric"
 WEIGHTS=""
 CONF_THR="1.001"
 PIXEL_TOL=0
-DENSE_MATCHING=0
+DENSE_MATCHING="auto"
 MIN_LEN_TRACK=5
 SKIP_GEOM=0
 USE_GLOMAP=0
@@ -82,6 +87,14 @@ while [[ $# -gt 0 ]]; do
             NUM_CPUS_OVERRIDE="$2"
             shift 2
             ;;
+        --threads)
+            THREADS_OVERRIDE="$2"
+            shift 2
+            ;;
+        --shm-size)
+            SHM_SIZE_OVERRIDE="$2"
+            shift 2
+            ;;
         --matcher)
             MATCHER="$2"
             shift 2
@@ -108,6 +121,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --dense-matching)
             DENSE_MATCHING=1
+            shift
+            ;;
+        --no-dense-matching)
+            DENSE_MATCHING=0
             shift
             ;;
         --min-len-track)
@@ -196,7 +213,33 @@ fi
 if [ -n "$NUM_CPUS_OVERRIDE" ]; then
     NUM_CPUS="$NUM_CPUS_OVERRIDE"
 else
-    NUM_CPUS=$(nproc)
+    TOTAL_CPUS=$(nproc)
+    NUM_CPUS=$TOTAL_CPUS
+    if [ "$TOTAL_CPUS" -gt 8 ]; then
+        NUM_CPUS=$((TOTAL_CPUS - 2))
+    fi
+    if [ "$NUM_CPUS" -gt 20 ]; then
+        NUM_CPUS=20
+    fi
+fi
+
+if [ -n "$THREADS_OVERRIDE" ]; then
+    THREADS="$THREADS_OVERRIDE"
+else
+    THREADS="$NUM_CPUS"
+fi
+
+if [ -n "$SHM_SIZE_OVERRIDE" ]; then
+    SHM_SIZE="$SHM_SIZE_OVERRIDE"
+else
+    MEM_TOTAL_KB=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
+    if [ "$MEM_TOTAL_KB" -ge 50000000 ]; then
+        SHM_SIZE="24g"
+    elif [ "$MEM_TOTAL_KB" -ge 24000000 ]; then
+        SHM_SIZE="16g"
+    else
+        SHM_SIZE="8g"
+    fi
 fi
 
 GPU_ARGS=()
@@ -215,11 +258,30 @@ else
     fi
 fi
 
+if [ "$DENSE_MATCHING" = "auto" ]; then
+    if [ "$DEVICE" = "cuda" ]; then
+        DENSE_MATCHING=1
+    else
+        DENSE_MATCHING=0
+    fi
+fi
+
+DEFAULT_WEIGHTS_REL="weights/mast3r/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric.pth"
+DEFAULT_WEIGHTS_HOST="${DATA_ROOT}/${DEFAULT_WEIGHTS_REL}"
+if [ -z "$WEIGHTS" ] && [ -f "$DEFAULT_WEIGHTS_HOST" ]; then
+    WEIGHTS="/data/${DEFAULT_WEIGHTS_REL}"
+fi
+
 DOCKER_ARGS=(
     --rm
     --cpus="${NUM_CPUS}"
     --ipc=host
-    --shm-size=16g
+    --shm-size="${SHM_SIZE}"
+    -e OMP_NUM_THREADS="${THREADS}"
+    -e OPENBLAS_NUM_THREADS="${THREADS}"
+    -e MKL_NUM_THREADS="${THREADS}"
+    -e NUMEXPR_NUM_THREADS="${THREADS}"
+    -e VECLIB_MAXIMUM_THREADS="${THREADS}"
     -v "${DATA_ROOT}:/data"
     -w /data
 )
@@ -273,6 +335,14 @@ echo "Modo         : ${MODE}"
 echo "Matcher      : ${MATCHER}"
 echo "Device       : ${DEVICE}"
 echo "CPUs         : ${NUM_CPUS}"
+echo "Threads      : ${THREADS}"
+echo "SHM size     : ${SHM_SIZE}"
+echo "Dense match  : ${DENSE_MATCHING}"
+if [ -n "$WEIGHTS" ]; then
+    echo "Weights      : ${WEIGHTS}"
+else
+    echo "Weights      : naver/${MODEL_NAME} (HF auto-download)"
+fi
 echo "========================================"
 echo ""
 
