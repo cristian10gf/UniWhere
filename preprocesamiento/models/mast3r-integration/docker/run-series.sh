@@ -16,8 +16,9 @@ Opciones:
     --cpus N               CPUs para Docker (default: auto, reserva 2 cores)
     --threads N            Hilos BLAS/OpenMP dentro del contenedor (default: igual a --cpus)
     --shm-size SIZE        Shared memory Docker, ej: 32g (default: auto según RAM host)
-    --scene-graph GRAPH    Estrategia de pares: logwin-N, swin-N, complete, oneref-N
-                           Añadir -noncyclic para desactivar cierre de loop (default: logwin-7)
+    --scene-graph GRAPH    Estrategia de pares: retrieval-Na-k (default: retrieval-20-10),
+                           logwin-N, swin-N, complete, oneref-N
+                           Añadir -noncyclic para desactivar cierre de loop
     --image-size N         Lado largo para inferencia MASt3R, ej: 512 o 384 (default: 512)
     --niter1 N             Iteraciones coarse alignment (default: 300)
     --niter2 N             Iteraciones fine alignment (default: 300)
@@ -48,7 +49,7 @@ FORCE_CPU=0
 NUM_CPUS_OVERRIDE=""
 THREADS_OVERRIDE=""
 SHM_SIZE_OVERRIDE=""
-SCENE_GRAPH="retrieval"
+SCENE_GRAPH="retrieval-20-10"
 IMAGE_SIZE=512
 NITER1=500
 NITER2=500
