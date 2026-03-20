@@ -36,6 +36,15 @@ RUN python setup.py build_ext --inplace
 WORKDIR /opt/mast3r
 RUN uv pip install --system -r requirements.txt
 
+# Instalar faiss (retrieval scene graph) — intentar GPU, fallback CPU
+RUN uv pip install --system faiss-gpu || uv pip install --system faiss-cpu
+
+# Instalar asmk (ASMK retrieval index, requiere Cython + compilación)
+RUN uv pip install --system cython && \
+    git clone --depth=1 https://github.com/jenicek/asmk /opt/asmk && \
+    cd /opt/asmk/cython && python -m cython *.pyx && \
+    cd /opt/asmk && uv pip install --system -e .
+
 # Copiar script principal desde mast3r-integration/ (junto al Dockerfile)
 COPY preprocesamiento/models/mast3r-integration/mast3r_sfm.py /opt/unwhere/mast3r_sfm.py
 
