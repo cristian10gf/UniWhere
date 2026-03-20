@@ -131,14 +131,23 @@ def write_points3d_txt(
     path: Path,
     pts3d_list: list,
     colors_list: list,
+    max_points: int = 100_000,
 ) -> int:
     """Escribe points3D.txt desde puntos ancla esparsos por imagen.
 
-    Cada punto recibe un ID único. El track es mínimo (image_id, point_idx).
+    get_sparse_pts3d() acumula observaciones de todos los pares que involucran
+    cada imagen, resultando en millones de puntos con muchos duplicados.
+    max_points limita el total escrito para que points3D.txt sea verdaderamente
+    "sparse" (referencia visual) y siempre tenga menos puntos que fused.ply.
+    ACE y OneFormer3D no consumen este archivo — solo cameras.txt/images.txt
+    y fused.ply respectivamente.
+
     Retorna el número de puntos escritos.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    rows: list[str] = []
+
+    # Recoger todos los puntos válidos (finitos)
+    all_rows: list[str] = []
     pid = 1
     for img_idx, (pts, cols) in enumerate(zip(pts3d_list, colors_list)):
         pts_np = pts.detach().cpu().numpy() if isinstance(pts, torch.Tensor) else np.asarray(pts)
@@ -152,10 +161,19 @@ def write_points3d_txt(
                 r, g, b = int(rgb[0] * 255), int(rgb[1] * 255), int(rgb[2] * 255)
             else:
                 r, g, b = int(rgb[0]), int(rgb[1]), int(rgb[2])
-            rows.append(
+            all_rows.append(
                 f"{pid} {x:.6f} {y:.6f} {z:.6f} {r} {g} {b} 0.0 {img_idx + 1} {j}\n"
             )
             pid += 1
+
+    # Submuestrear si hay más puntos del límite
+    rng = np.random.default_rng(42)
+    if len(all_rows) > max_points:
+        idxs = rng.choice(len(all_rows), size=max_points, replace=False)
+        idxs.sort()
+        rows = [all_rows[i] for i in idxs]
+    else:
+        rows = all_rows
 
     with path.open("w", encoding="utf-8") as f:
         f.write("# 3D point list with one line of data per point:\n")

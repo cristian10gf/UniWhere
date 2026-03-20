@@ -119,6 +119,22 @@ def test_write_points3d_txt_filters_nan():
         assert len(data) == 1
 
 
+def test_write_points3d_txt_max_points():
+    """get_sparse_pts3d() acumula millones de puntos de múltiples pares;
+    max_points garantiza que points3D.txt siempre tenga menos puntos que fused.ply."""
+    n_pts = 200
+    pts = [np.random.default_rng(0).random((n_pts, 3)) for _ in range(3)]
+    cols = [np.random.default_rng(1).random((n_pts, 3)) for _ in range(3)]
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "points3D.txt"
+        # sin límite: 3*200 = 600 puntos
+        n_all = write_points3d_txt(p, pts, cols, max_points=600)
+        assert n_all == 600
+        # con límite: exactamente max_points
+        n_capped = write_points3d_txt(p, pts, cols, max_points=100)
+        assert n_capped == 100
+
+
 def test_write_ply_confidence_filter():
     pts = [np.array([[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]])]  # shape (1, 2, 3)
     confs = [np.array([[0.5, 2.0]])]   # primer punto bajo umbral, segundo pasa
