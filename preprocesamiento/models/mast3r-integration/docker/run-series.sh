@@ -3,39 +3,40 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Uso: ./run-series.sh <serie> [opciones] [-- args_extra_mast3r]
+Uso: ./run-series.sh <serie> [opciones]
 
-Reconstruye una serie con MASt3R en Docker/CUDA y exporta un layout
-compatible con el pipeline actual:
-  - data/<serie>/database.db
-  - data/<serie>/sparse/0/{cameras,images,points3D}.bin
+Reconstruye una serie con MASt3R-SfM (sparse_global_alignment) en Docker/CUDA
+y exporta layout compatible con el pipeline UniWhere:
+  - data/<serie>/sparse/0/{cameras,images,points3D}.txt
   - data/<serie>/dense/0/fused.ply
 
 Opciones:
-    --data-root PATH             Carpeta base de datasets (default: preprocesamiento/data)
-    --mode MODE                  automatic|advanced|shell (default: advanced)
-    --cpu                        Fuerza ejecucion sin GPU
-    --cpus N                     Numero de CPUs para Docker (default: auto, reserva 2 cores)
-    --threads N                  Hilos BLAS/OpenMP dentro del contenedor (default: igual a --cpus)
-    --shm-size SIZE              Shared memory Docker, ej: 16g (default: auto segun RAM host)
-    --matcher TYPE               sequential|exhaustive|vocab_tree (default por modo)
-    --overlap N                  Overlap para matcher sequential (default: 20)
-    --model-name NAME            Modelo HF (default: MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric)
-    --weights PATH               Checkpoint local dentro del contenedor (default: auto en /data/weights/mast3r)
-    --conf-thr FLOAT             Umbral de confianza (default: 1.001)
-    --pixel-tol N                Tolerancia pixel para matching denso (default: 0)
-    --dense-matching             Fuerza matching denso
-    --no-dense-matching          Desactiva matching denso
-    --min-len-track N            Longitud minima de track (default: 5)
-    --skip-geometric-verification Saltar verify_matches
-    --use-glomap-mapper          Usar glomap mapper en vez de pycolmap mapper
-    -h, --help                   Muestra esta ayuda
+    --data-root PATH       Carpeta base de datasets (default: preprocesamiento/data)
+    --cpu                  Fuerza ejecución sin GPU
+    --cpus N               CPUs para Docker (default: auto, reserva 2 cores)
+    --threads N            Hilos BLAS/OpenMP dentro del contenedor (default: igual a --cpus)
+    --shm-size SIZE        Shared memory Docker, ej: 32g (default: auto según RAM host)
+    --scene-graph GRAPH    Estrategia de pares: logwin-N, swin-N, complete, oneref-N
+                           Añadir -noncyclic para desactivar cierre de loop (default: logwin-7)
+    --image-size N         Lado largo para inferencia MASt3R, ej: 512 o 384 (default: 512)
+    --niter1 N             Iteraciones coarse alignment (default: 300)
+    --niter2 N             Iteraciones fine alignment (default: 300)
+    --lr1 FLOAT            Learning rate coarse (default: 0.07)
+    --lr2 FLOAT            Learning rate fine (default: 0.01)
+    --min-conf-thr FLOAT   Umbral confianza nube densa (default: 1.5)
+    --subsample N          Submuestreo nube densa en px (default: 8)
+    --model-name NAME      Modelo HuggingFace (default: MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric)
+    --weights PATH         Checkpoint local en el contenedor (default: auto en /data/weights/mast3r)
+    --shell                Abre shell interactivo en el contenedor (para depuración)
+    -h, --help             Muestra esta ayuda
 
 Ejemplos:
-  ./run-series.sh edificio-a
-  ./run-series.sh edificio-a --mode automatic --matcher sequential --overlap 25
-  ./run-series.sh edificio-a --cpu --conf-thr 1.2
-  ./run-series.sh edificio-a -- --min-len-track 7
+  ./run-series.sh salon9
+  ./run-series.sh salon9 --scene-graph logwin-7
+  ./run-series.sh salon9 --niter1 500 --niter2 500 --min-conf-thr 2.0
+  ./run-series.sh salon9 --scene-graph swin-20-noncyclic
+  ./run-series.sh salon9 --cpu --image-size 384
+  ./run-series.sh salon9 --shell
 EOF
 }
 
@@ -43,164 +44,62 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_ROOT=$(realpath "${SCRIPT_DIR}/../../../..")
 DATA_ROOT="${PROJECT_ROOT}/preprocesamiento/data"
 SERIE=""
-MODE="advanced"
 FORCE_CPU=0
 NUM_CPUS_OVERRIDE=""
 THREADS_OVERRIDE=""
 SHM_SIZE_OVERRIDE=""
-MATCHER=""
-OVERLAP=20
+SCENE_GRAPH="logwin-7"
+IMAGE_SIZE=512
+NITER1=300
+NITER2=300
+LR1="0.07"
+LR2="0.01"
+MIN_CONF_THR="1.5"
+SUBSAMPLE=8
 MODEL_NAME="MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric"
 WEIGHTS=""
-CONF_THR="1.001"
-PIXEL_TOL=0
-DENSE_MATCHING="auto"
-MIN_LEN_TRACK=5
-SKIP_GEOM=0
-USE_GLOMAP=0
-EXTRA_ARGS=()
-
-if [ $# -eq 0 ]; then
-    usage
-    exit 1
-fi
+SHELL_MODE=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        -h|--help)
-            usage
-            exit 0
-            ;;
-        --data-root)
-            DATA_ROOT="$2"
-            shift 2
-            ;;
-        --mode)
-            MODE="$2"
-            shift 2
-            ;;
-        --cpu)
-            FORCE_CPU=1
-            shift
-            ;;
-        --cpus)
-            NUM_CPUS_OVERRIDE="$2"
-            shift 2
-            ;;
-        --threads)
-            THREADS_OVERRIDE="$2"
-            shift 2
-            ;;
-        --shm-size)
-            SHM_SIZE_OVERRIDE="$2"
-            shift 2
-            ;;
-        --matcher)
-            MATCHER="$2"
-            shift 2
-            ;;
-        --overlap)
-            OVERLAP="$2"
-            shift 2
-            ;;
-        --model-name)
-            MODEL_NAME="$2"
-            shift 2
-            ;;
-        --weights)
-            WEIGHTS="$2"
-            shift 2
-            ;;
-        --conf-thr)
-            CONF_THR="$2"
-            shift 2
-            ;;
-        --pixel-tol)
-            PIXEL_TOL="$2"
-            shift 2
-            ;;
-        --dense-matching)
-            DENSE_MATCHING=1
-            shift
-            ;;
-        --no-dense-matching)
-            DENSE_MATCHING=0
-            shift
-            ;;
-        --min-len-track)
-            MIN_LEN_TRACK="$2"
-            shift 2
-            ;;
-        --skip-geometric-verification)
-            SKIP_GEOM=1
-            shift
-            ;;
-        --use-glomap-mapper)
-            USE_GLOMAP=1
-            shift
-            ;;
-        --)
-            shift
-            EXTRA_ARGS+=("$@")
-            break
-            ;;
-        -* )
-            echo "Error: opcion desconocida '$1'"
-            echo ""
-            usage
-            exit 1
-            ;;
+        -h|--help)        usage; exit 0 ;;
+        --data-root)      DATA_ROOT="$2";       shift 2 ;;
+        --cpu)            FORCE_CPU=1;           shift   ;;
+        --cpus)           NUM_CPUS_OVERRIDE="$2"; shift 2 ;;
+        --threads)        THREADS_OVERRIDE="$2"; shift 2 ;;
+        --shm-size)       SHM_SIZE_OVERRIDE="$2"; shift 2 ;;
+        --scene-graph)    SCENE_GRAPH="$2";      shift 2 ;;
+        --image-size)     IMAGE_SIZE="$2";        shift 2 ;;
+        --niter1)         NITER1="$2";            shift 2 ;;
+        --niter2)         NITER2="$2";            shift 2 ;;
+        --lr1)            LR1="$2";               shift 2 ;;
+        --lr2)            LR2="$2";               shift 2 ;;
+        --min-conf-thr)   MIN_CONF_THR="$2";      shift 2 ;;
+        --subsample)      SUBSAMPLE="$2";         shift 2 ;;
+        --model-name)     MODEL_NAME="$2";        shift 2 ;;
+        --weights)        WEIGHTS="$2";           shift 2 ;;
+        --shell)          SHELL_MODE=1;           shift   ;;
+        -*)
+            echo "Error: opción desconocida '$1'"; echo; usage; exit 1 ;;
         *)
-            if [ -z "$SERIE" ]; then
-                SERIE="$1"
-            else
-                EXTRA_ARGS+=("$1")
-            fi
-            shift
-            ;;
+            [ -z "$SERIE" ] && SERIE="$1" || { echo "Error: argumento extra '$1'"; exit 1; }
+            shift ;;
     esac
 done
 
-if [ -z "$SERIE" ]; then
-    echo "Error: debes indicar el nombre de la serie."
-    echo ""
-    usage
-    exit 1
+if [ -z "$SERIE" ] && [ "$SHELL_MODE" -eq 0 ]; then
+    echo "Error: debes indicar el nombre de la serie."; echo; usage; exit 1
 fi
-
-case "$MODE" in
-    automatic|advanced|shell) ;;
-    *)
-        echo "Error: modo invalido '$MODE'. Usa automatic, advanced o shell."
-        exit 1
-        ;;
-esac
 
 DATA_ROOT=$(realpath "$DATA_ROOT")
 SERIE_DIR="${DATA_ROOT}/${SERIE}"
 IMAGES_DIR="${SERIE_DIR}/images"
 
-if [ ! -d "$IMAGES_DIR" ]; then
-    echo "Error: no se encontro '${IMAGES_DIR}'."
-    echo "La estructura esperada es: preprocesamiento/data/<serie>/images/"
+if [ "$SHELL_MODE" -eq 0 ] && [ ! -d "$IMAGES_DIR" ]; then
+    echo "Error: no se encontró '${IMAGES_DIR}'."
+    echo "Estructura esperada: preprocesamiento/data/<serie>/images/"
     exit 1
 fi
-
-if [ -z "$MATCHER" ]; then
-    if [ "$MODE" = "automatic" ]; then
-        MATCHER="sequential"
-    else
-        MATCHER="exhaustive"
-    fi
-fi
-
-case "$MATCHER" in
-    sequential|exhaustive|vocab_tree) ;;
-    *)
-        echo "Error: matcher invalido '$MATCHER'."
-        exit 1
-        ;;
-esac
 
 IMAGE_TAG="mast3r-pipeline:latest"
 DOCKERFILE="${PROJECT_ROOT}/preprocesamiento/models/mast3r-integration/docker/Dockerfile"
@@ -210,67 +109,66 @@ if ! docker image inspect "$IMAGE_TAG" >/dev/null 2>&1; then
     docker build -f "$DOCKERFILE" -t "$IMAGE_TAG" "$PROJECT_ROOT"
 fi
 
+# ── CPUs ──────────────────────────────────────────────────────────────────────
 if [ -n "$NUM_CPUS_OVERRIDE" ]; then
     NUM_CPUS="$NUM_CPUS_OVERRIDE"
 else
     TOTAL_CPUS=$(nproc)
     NUM_CPUS=$TOTAL_CPUS
-    if [ "$TOTAL_CPUS" -gt 8 ]; then
-        NUM_CPUS=$((TOTAL_CPUS - 2))
-    fi
-    if [ "$NUM_CPUS" -gt 20 ]; then
-        NUM_CPUS=20
-    fi
+    [ "$TOTAL_CPUS" -gt 8 ]  && NUM_CPUS=$((TOTAL_CPUS - 2))
+    [ "$NUM_CPUS"   -gt 20 ] && NUM_CPUS=20
 fi
+THREADS="${THREADS_OVERRIDE:-$NUM_CPUS}"
 
-if [ -n "$THREADS_OVERRIDE" ]; then
-    THREADS="$THREADS_OVERRIDE"
-else
-    THREADS="$NUM_CPUS"
-fi
-
+# ── Shared memory ─────────────────────────────────────────────────────────────
 if [ -n "$SHM_SIZE_OVERRIDE" ]; then
     SHM_SIZE="$SHM_SIZE_OVERRIDE"
 else
     MEM_TOTAL_KB=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
-    if [ "$MEM_TOTAL_KB" -ge 50000000 ]; then
-        SHM_SIZE="24g"
-    elif [ "$MEM_TOTAL_KB" -ge 24000000 ]; then
-        SHM_SIZE="16g"
-    else
-        SHM_SIZE="8g"
+    if   [ "$MEM_TOTAL_KB" -ge 50000000 ]; then SHM_SIZE="24g"
+    elif [ "$MEM_TOTAL_KB" -ge 24000000 ]; then SHM_SIZE="16g"
+    else                                        SHM_SIZE="8g"
     fi
 fi
 
+# ── GPU ───────────────────────────────────────────────────────────────────────
 GPU_ARGS=()
 DEVICE="cuda"
-
 if [ "$FORCE_CPU" -eq 1 ]; then
     DEVICE="cpu"
+elif docker run --rm --gpus all --entrypoint nvidia-smi "$IMAGE_TAG" >/dev/null 2>&1; then
+    GPU_ARGS+=(--gpus all -e NVIDIA_VISIBLE_DEVICES=all -e NVIDIA_DRIVER_CAPABILITIES=compute,utility)
+elif docker run --rm --runtime=nvidia --entrypoint nvidia-smi "$IMAGE_TAG" >/dev/null 2>&1; then
+    GPU_ARGS+=(--runtime=nvidia -e NVIDIA_VISIBLE_DEVICES=all -e NVIDIA_DRIVER_CAPABILITIES=compute,utility)
 else
-    if docker run --rm --gpus all --entrypoint nvidia-smi "$IMAGE_TAG" >/dev/null 2>&1; then
-        GPU_ARGS+=(--gpus all -e NVIDIA_VISIBLE_DEVICES=all -e NVIDIA_DRIVER_CAPABILITIES=compute,utility)
-    elif docker run --rm --runtime=nvidia --entrypoint nvidia-smi "$IMAGE_TAG" >/dev/null 2>&1; then
-        GPU_ARGS+=(--runtime=nvidia -e NVIDIA_VISIBLE_DEVICES=all -e NVIDIA_DRIVER_CAPABILITIES=compute,utility)
-    else
-        echo "WARN: Docker sin acceso a GPU; ejecutando en CPU."
-        DEVICE="cpu"
-    fi
+    echo "WARN: Docker sin GPU; ejecutando en CPU."
+    DEVICE="cpu"
 fi
 
-if [ "$DENSE_MATCHING" = "auto" ]; then
-    if [ "$DEVICE" = "cuda" ]; then
-        DENSE_MATCHING=1
-    else
-        DENSE_MATCHING=0
-    fi
-fi
+# ── Weights ───────────────────────────────────────────────────────────────────
+DEFAULT_WEIGHTS_HOST="${DATA_ROOT}/weights/mast3r/${MODEL_NAME}.pth"
+[ -z "$WEIGHTS" ] && [ -f "$DEFAULT_WEIGHTS_HOST" ] && \
+    WEIGHTS="/data/weights/mast3r/${MODEL_NAME}.pth"
 
-DEFAULT_WEIGHTS_REL="weights/mast3r/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric.pth"
-DEFAULT_WEIGHTS_HOST="${DATA_ROOT}/${DEFAULT_WEIGHTS_REL}"
-if [ -z "$WEIGHTS" ] && [ -f "$DEFAULT_WEIGHTS_HOST" ]; then
-    WEIGHTS="/data/${DEFAULT_WEIGHTS_REL}"
-fi
+# ── Resumen ───────────────────────────────────────────────────────────────────
+echo "========================================"
+echo " MASt3R-SfM series runner"
+echo "========================================"
+echo "Serie        : ${SERIE}"
+echo "Data root    : ${DATA_ROOT}"
+echo "Scene graph  : ${SCENE_GRAPH}"
+echo "Image size   : ${IMAGE_SIZE}"
+echo "Device       : ${DEVICE}"
+echo "CPUs         : ${NUM_CPUS}  Threads: ${THREADS}"
+echo "SHM size     : ${SHM_SIZE}"
+echo "niter1 / lr1 : ${NITER1} / ${LR1}"
+echo "niter2 / lr2 : ${NITER2} / ${LR2}"
+echo "min-conf-thr : ${MIN_CONF_THR}"
+echo "subsample    : ${SUBSAMPLE}"
+[ -n "$WEIGHTS" ] && echo "Weights      : ${WEIGHTS}" || \
+    echo "Weights      : naver/${MODEL_NAME} (HF auto-download)"
+echo "========================================"
+echo ""
 
 DOCKER_ARGS=(
     --rm
@@ -285,65 +183,26 @@ DOCKER_ARGS=(
     -v "${DATA_ROOT}:/data"
     -w /data
 )
+[ ${#GPU_ARGS[@]} -gt 0 ] && DOCKER_ARGS+=("${GPU_ARGS[@]}")
 
-if [ ${#GPU_ARGS[@]} -gt 0 ] && [ "$DEVICE" = "cuda" ]; then
-    DOCKER_ARGS+=("${GPU_ARGS[@]}")
-fi
-
-if [ "$MODE" = "shell" ]; then
+if [ "$SHELL_MODE" -eq 1 ]; then
     exec docker run -it --entrypoint /bin/bash "${DOCKER_ARGS[@]}" "$IMAGE_TAG"
 fi
 
-MAPPING_ARGS=(
-    --series-dir "/data/${SERIE}"
-    --images-dir "/data/${SERIE}/images"
-    --matcher "$MATCHER"
-    --overlap "$OVERLAP"
-    --model-name "$MODEL_NAME"
-    --device "$DEVICE"
-    --conf-thr "$CONF_THR"
-    --pixel-tol "$PIXEL_TOL"
-    --min-len-track "$MIN_LEN_TRACK"
+SFM_ARGS=(
+    --series-dir   "/data/${SERIE}"
+    --images-dir   "/data/${SERIE}/images"
+    --scene-graph  "$SCENE_GRAPH"
+    --image-size   "$IMAGE_SIZE"
+    --niter1       "$NITER1"
+    --niter2       "$NITER2"
+    --lr1          "$LR1"
+    --lr2          "$LR2"
+    --min-conf-thr "$MIN_CONF_THR"
+    --subsample    "$SUBSAMPLE"
+    --model-name   "$MODEL_NAME"
+    --device       "$DEVICE"
 )
+[ -n "$WEIGHTS" ] && SFM_ARGS+=(--weights "$WEIGHTS")
 
-if [ -n "$WEIGHTS" ]; then
-    MAPPING_ARGS+=(--weights "$WEIGHTS")
-fi
-
-if [ "$DENSE_MATCHING" -eq 1 ]; then
-    MAPPING_ARGS+=(--dense-matching)
-fi
-
-if [ "$SKIP_GEOM" -eq 1 ]; then
-    MAPPING_ARGS+=(--skip-geometric-verification)
-fi
-
-if [ "$USE_GLOMAP" -eq 1 ]; then
-    MAPPING_ARGS+=(--use-glomap-mapper)
-fi
-
-if [ ${#EXTRA_ARGS[@]} -gt 0 ]; then
-    MAPPING_ARGS+=("${EXTRA_ARGS[@]}")
-fi
-
-echo "========================================"
-echo " MASt3R series runner"
-echo "========================================"
-echo "Serie        : ${SERIE}"
-echo "Data root    : ${DATA_ROOT}"
-echo "Modo         : ${MODE}"
-echo "Matcher      : ${MATCHER}"
-echo "Device       : ${DEVICE}"
-echo "CPUs         : ${NUM_CPUS}"
-echo "Threads      : ${THREADS}"
-echo "SHM size     : ${SHM_SIZE}"
-echo "Dense match  : ${DENSE_MATCHING}"
-if [ -n "$WEIGHTS" ]; then
-    echo "Weights      : ${WEIGHTS}"
-else
-    echo "Weights      : naver/${MODEL_NAME} (HF auto-download)"
-fi
-echo "========================================"
-echo ""
-
-exec docker run "${DOCKER_ARGS[@]}" "$IMAGE_TAG" "${MAPPING_ARGS[@]}"
+exec docker run "${DOCKER_ARGS[@]}" "$IMAGE_TAG" "${SFM_ARGS[@]}"
