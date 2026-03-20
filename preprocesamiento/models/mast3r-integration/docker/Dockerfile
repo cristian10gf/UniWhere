@@ -26,6 +26,9 @@ RUN uv pip install --system -r requirements.txt
 RUN uv pip install --system -r requirements_optional.txt
 RUN uv pip install --system "opencv-python==4.8.0.74"
 
+# Pin numpy<2 DESPUÉS de todos los installs — compatibilidad con PyTorch 2.2 del base image Jan 2024
+RUN uv pip install --system "numpy<2"
+
 # Compilar kernels CUDA RoPE (embeddings posicionales, acelera inferencia)
 WORKDIR /opt/mast3r/dust3r/croco/models/curope/
 RUN python setup.py build_ext --inplace
