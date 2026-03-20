@@ -1,0 +1,18 @@
+[project]
+name = "mast3r-integration"
+version = "0.1.0"
+description = "MASt3R-SfM integration for UniWhere pipeline"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "torch",
+    "pillow",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
