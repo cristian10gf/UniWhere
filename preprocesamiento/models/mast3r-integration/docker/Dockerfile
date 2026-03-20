@@ -36,8 +36,8 @@ RUN python setup.py build_ext --inplace
 WORKDIR /opt/mast3r
 RUN uv pip install --system -r requirements.txt
 
-# Instalar faiss (retrieval scene graph) — intentar GPU, fallback CPU
-RUN uv pip install --system faiss-gpu || uv pip install --system faiss-cpu
+# Instalar faiss-cpu (retrieval scene graph) — faiss-gpu crashea con cuBLAS en CUDA 12.3
+RUN uv pip install --system faiss-cpu
 
 # Instalar asmk (ASMK retrieval index, requiere Cython + compilación)
 RUN uv pip install --system cython && \
