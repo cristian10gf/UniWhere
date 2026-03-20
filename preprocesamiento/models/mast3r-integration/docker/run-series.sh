@@ -151,6 +151,12 @@ DEFAULT_WEIGHTS_HOST="${DATA_ROOT}/weights/mast3r/${MODEL_NAME}.pth"
 [ -z "$WEIGHTS" ] && [ -f "$DEFAULT_WEIGHTS_HOST" ] && \
     WEIGHTS="/data/weights/mast3r/${MODEL_NAME}.pth"
 
+# ── Retrieval model (auto-detectado si existe junto al checkpoint principal) ──
+RETRIEVAL_MODEL=""
+DEFAULT_RETRIEVAL_HOST="${DATA_ROOT}/weights/mast3r/${MODEL_NAME}_retrieval_trainingfree.pth"
+[ -f "$DEFAULT_RETRIEVAL_HOST" ] && \
+    RETRIEVAL_MODEL="/data/weights/mast3r/${MODEL_NAME}_retrieval_trainingfree.pth"
+
 # ── Resumen ───────────────────────────────────────────────────────────────────
 echo "========================================"
 echo " MASt3R-SfM series runner"
@@ -205,5 +211,6 @@ SFM_ARGS=(
     --device       "$DEVICE"
 )
 [ -n "$WEIGHTS" ] && SFM_ARGS+=(--weights "$WEIGHTS")
+[ -n "$RETRIEVAL_MODEL" ] && SFM_ARGS+=(--retrieval-model "$RETRIEVAL_MODEL")
 
 exec docker run "${DOCKER_ARGS[@]}" "$IMAGE_TAG" "${SFM_ARGS[@]}"

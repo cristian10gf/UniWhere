@@ -439,6 +439,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--model-name",  default="MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric")
     p.add_argument("--weights",     default="",
                    help="Checkpoint local; si vacío, descarga de HuggingFace.")
+    p.add_argument("--retrieval-model", default="",
+                   help="Checkpoint del modelo retrieval (para scene-graph=retrieval-Na-k). "
+                        "Si vacío y --weights apunta a un .pth local, se auto-detecta el "
+                        "archivo *_retrieval_trainingfree.pth en el mismo directorio.")
     p.add_argument("--device",      default="cuda", choices=["cuda", "cpu"])
     p.add_argument("--image-size",  type=int, default=512,
                    help="Lado largo de imagen para inferencia (512 = default MASt3R).")
@@ -502,18 +506,41 @@ def main() -> int:
     ]
     image_names = [Path(fp).name for fp in filelist]
 
-    # --- Generar pares ---
-    print(f"Generando pares (scene-graph={args.scene_graph})...")
-    # NOTA: make_pairs recibe los dicts cargados (imgs), NO filelist
-    pairs = make_pairs(imgs, scene_graph=args.scene_graph, symmetrize=True)
-    print(f"  {len(pairs)} pares generados")
-    if not pairs:
-        raise RuntimeError("No se generaron pares de imágenes.")
-
-    # --- Cargar modelo ---
+    # --- Cargar modelo principal ---
     weights_path = args.weights or f"naver/{args.model_name}"
     print(f"Cargando modelo: {weights_path}")
     model = AsymmetricMASt3R.from_pretrained(weights_path).to(args.device)
+
+    # --- Matriz de similitud para retrieval (antes de make_pairs) ---
+    sim_mat = None
+    if args.scene_graph.startswith("retrieval"):
+        retrieval_weights = args.retrieval_model
+        if not retrieval_weights and args.weights:
+            # Auto-detectar: <stem>_retrieval_trainingfree.pth junto al checkpoint principal
+            stem = args.weights.replace(".pth", "")
+            candidate = f"{stem}_retrieval_trainingfree.pth"
+            import os  # noqa: PLC0415
+            if os.path.isfile(candidate):
+                retrieval_weights = candidate
+        if not retrieval_weights:
+            raise RuntimeError(
+                "scene-graph=retrieval-Na-k requiere --retrieval-model o un archivo "
+                "*_retrieval_trainingfree.pth junto al --weights principal."
+            )
+        from mast3r.retrieval.processor import RetrievalProcessor  # noqa: PLC0415
+        print(f"Calculando matriz de similitud (retrieval model: {retrieval_weights})...")
+        proc = RetrievalProcessor(retrieval_weights, backbone=model, device=args.device)
+        sim_mat = proc(filelist)
+        del proc
+        print(f"  sim_mat shape: {sim_mat.shape}")
+
+    # --- Generar pares ---
+    print(f"Generando pares (scene-graph={args.scene_graph})...")
+    # NOTA: make_pairs recibe los dicts cargados (imgs), NO filelist
+    pairs = make_pairs(imgs, scene_graph=args.scene_graph, symmetrize=True, sim_mat=sim_mat)
+    print(f"  {len(pairs)} pares generados")
+    if not pairs:
+        raise RuntimeError("No se generaron pares de imágenes.")
 
     # --- MASt3R-SfM ---
     print(
