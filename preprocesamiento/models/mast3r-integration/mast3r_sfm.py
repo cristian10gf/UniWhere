@@ -527,9 +527,9 @@ def main() -> int:
                 "scene-graph=retrieval-Na-k requiere --retrieval-model o un archivo "
                 "*_retrieval_trainingfree.pth junto al --weights principal."
             )
-        from mast3r.retrieval.processor import RetrievalProcessor  # noqa: PLC0415
+        from mast3r.retrieval.processor import Retriever  # noqa: PLC0415
         print(f"Calculando matriz de similitud (retrieval model: {retrieval_weights})...")
-        proc = RetrievalProcessor(retrieval_weights, backbone=model, device=args.device)
+        proc = Retriever(retrieval_weights, backbone=model, device=args.device)
         sim_mat = proc(filelist)
         del proc
         print(f"  sim_mat shape: {sim_mat.shape}")
