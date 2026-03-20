@@ -207,32 +207,51 @@ def write_points3d_txt(
     fused.ply respectivamente. Retorna el número de puntos escritos.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    rows: list[str] = []
-    pid = 1
+    all_pts: list[np.ndarray] = []
+    all_rgb: list[np.ndarray] = []
+    img_ids: list[np.ndarray] = []
+
     for img_idx, (pts, cols) in enumerate(zip(pts3d_list, colors_list)):
-        pts_np = pts.detach().cpu().numpy() if isinstance(pts, torch.Tensor) else np.asarray(pts)
-        cols_np = np.asarray(cols)
-        for j in range(len(pts_np)):
-            x, y, z = pts_np[j]
-            if not np.isfinite([x, y, z]).all():
-                continue
-            rgb = cols_np[j]
-            if rgb.max() <= 1.0:
-                r, g, b = int(rgb[0] * 255), int(rgb[1] * 255), int(rgb[2] * 255)
-            else:
-                r, g, b = int(rgb[0]), int(rgb[1]), int(rgb[2])
-            rows.append(
-                f"{pid} {x:.6f} {y:.6f} {z:.6f} {r} {g} {b} 0.0 {img_idx + 1} {j}\n"
-            )
-            pid += 1
+        pts_np = (pts.detach().cpu().numpy() if isinstance(pts, torch.Tensor)
+                  else np.asarray(pts, dtype=np.float64))
+        cols_np = np.asarray(cols, dtype=np.float64)
+        valid = np.isfinite(pts_np).all(axis=1)
+        pts_v = pts_np[valid]
+        cols_v = cols_np[valid]
+        scale = 255.0 if cols_v.max() <= 1.0 else 1.0
+        rgb = (cols_v * scale).clip(0, 255).astype(np.int32)
+        all_pts.append(pts_v)
+        all_rgb.append(rgb)
+        img_ids.append(np.full(len(pts_v), img_idx + 1, dtype=np.int32))
+
+    if not all_pts:
+        with path.open("w", encoding="utf-8") as f:
+            f.write("# 3D point list with one line of data per point:\n")
+            f.write("#   POINT3D_ID, X, Y, Z, R, G, B, ERROR, TRACK[] as (IMAGE_ID, POINT2D_IDX)\n")
+            f.write("# Number of points: 0\n")
+        return 0
+
+    pts_out = np.vstack(all_pts)
+    rgb_out = np.vstack(all_rgb)
+    iid_out = np.concatenate(img_ids)
+    n = len(pts_out)
+    pids = np.arange(1, n + 1, dtype=np.int32)
+    j_idx = np.arange(n, dtype=np.int32)
 
     with path.open("w", encoding="utf-8") as f:
         f.write("# 3D point list with one line of data per point:\n")
         f.write("#   POINT3D_ID, X, Y, Z, R, G, B, ERROR, TRACK[] as (IMAGE_ID, POINT2D_IDX)\n")
-        f.write(f"# Number of points: {len(rows)}\n")
-        f.writelines(rows)
+        f.write(f"# Number of points: {n}\n")
+        # Vectorized formatting via numpy: one call per chunk avoids Python loop
+        data = np.column_stack([
+            pids, pts_out, rgb_out,
+            np.zeros(n, dtype=np.float64),  # ERROR
+            iid_out, j_idx,
+        ])
+        np.savetxt(f, data,
+                   fmt="%d %.6f %.6f %.6f %d %d %d %.1f %d %d")
 
-    return len(rows)
+    return n
 
 
 def write_ply(
@@ -242,39 +261,50 @@ def write_ply(
     colors_list: list | None,
     min_conf_thr: float,
 ) -> int:
-    """Escribe dense/0/fused.ply ASCII desde puntos 3D densos filtrados por confianza."""
+    """Escribe dense/0/fused.ply ASCII desde puntos 3D densos filtrados por confianza.
+
+    colors_list debe ser una lista de arrays (H, W, 3) o (H*W, 3) float [0,1]
+    correspondientes a los píxeles de la imagen (scene.imgs), o None para blanco.
+    Usa numpy vectorizado — evita loops Python sobre millones de puntos.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    vertices: list[tuple] = []
+    all_pts: list[np.ndarray] = []
+    all_cols: list[np.ndarray] = []
 
     for i, (pts, confs) in enumerate(zip(pts3d_list, confs_list)):
-        pts_np = pts.detach().cpu().numpy() if isinstance(pts, torch.Tensor) else np.asarray(pts)
-        conf_np = confs.detach().cpu().numpy() if isinstance(confs, torch.Tensor) else np.asarray(confs)
-        pts_flat = pts_np.reshape(-1, 3)
-        conf_flat = conf_np.reshape(-1)
-        mask = (conf_flat >= min_conf_thr) & np.isfinite(pts_flat).all(axis=1)
+        pts_np = (pts.detach().cpu().numpy() if isinstance(pts, torch.Tensor)
+                  else np.asarray(pts, dtype=np.float32)).reshape(-1, 3)
+        conf_np = (confs.detach().cpu().numpy() if isinstance(confs, torch.Tensor)
+                   else np.asarray(confs)).reshape(-1)
+        mask = (conf_np >= min_conf_thr) & np.isfinite(pts_np).all(axis=1)
+
+        all_pts.append(pts_np[mask])
 
         if colors_list is not None:
-            cols = colors_list[i]
-            cols_np = cols.detach().cpu().numpy() if isinstance(cols, torch.Tensor) else np.asarray(cols)
-            cols_flat = cols_np.reshape(-1, 3)
-            for xyz, rgb in zip(pts_flat[mask], cols_flat[mask]):
-                factor = 255 if rgb.max() <= 1.0 else 1
-                r, g, b = int(rgb[0] * factor), int(rgb[1] * factor), int(rgb[2] * factor)
-                vertices.append((*xyz, r, g, b))
+            c = colors_list[i]
+            c_np = (c.detach().cpu().numpy() if isinstance(c, torch.Tensor)
+                    else np.asarray(c, dtype=np.float32)).reshape(-1, 3)[mask]
+            # scene.imgs están en float [0,1]; convertir a uint8
+            scale = 255.0 if float(c_np.max()) <= 1.0 else 1.0
+            all_cols.append((c_np * scale).clip(0, 255).astype(np.uint8))
         else:
-            for xyz in pts_flat[mask]:
-                vertices.append((*xyz, 255, 255, 255))
+            all_cols.append(np.full((int(mask.sum()), 3), 255, dtype=np.uint8))
+
+    pts_out = np.vstack(all_pts) if all_pts else np.empty((0, 3), dtype=np.float32)
+    cols_out = np.vstack(all_cols) if all_cols else np.empty((0, 3), dtype=np.uint8)
+    total = len(pts_out)
 
     with path.open("w", encoding="utf-8") as f:
         f.write("ply\nformat ascii 1.0\n")
-        f.write(f"element vertex {len(vertices)}\n")
+        f.write(f"element vertex {total}\n")
         f.write("property float x\nproperty float y\nproperty float z\n")
         f.write("property uchar red\nproperty uchar green\nproperty uchar blue\n")
         f.write("end_header\n")
-        for v in vertices:
-            f.write(f"{v[0]:.9f} {v[1]:.9f} {v[2]:.9f} {v[3]} {v[4]} {v[5]}\n")
+        if total > 0:
+            data = np.hstack([pts_out.astype(np.float64), cols_out.astype(np.float64)])
+            np.savetxt(f, data, fmt="%.9f %.9f %.9f %d %d %d")
 
-    return len(vertices)
+    return total
 
 
 # ---------------------------------------------------------------------------
@@ -378,13 +408,15 @@ def adapt_outputs(
     print(f"  points3D.txt: {n_sparse} puntos únicos")
 
     # fused.ply (nube densa filtrada por confianza)
+    # Los colores vienen de scene.imgs: list de (H, W, 3) float [0,1] — misma
+    # ordenación pixel por pixel que los pts3d densos que genera make_pts3d().
     print(f"Generando nube densa (subsample={subsample})...")
     pts3d_dense, _, confs = scene.get_dense_pts3d(clean_depth=True, subsample=subsample)
     n_dense = write_ply(
         dense_dst / "fused.ply",
         pts3d_dense,
         confs,
-        colors_list=None,
+        colors_list=scene.imgs,  # float [0,1] (H,W,3) — el MASt3R viz usa esto mismo
         min_conf_thr=min_conf_thr,
     )
     print(f"  fused.ply   : {n_dense} puntos (conf >= {min_conf_thr})")
