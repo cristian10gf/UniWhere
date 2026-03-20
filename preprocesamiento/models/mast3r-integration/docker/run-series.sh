@@ -182,6 +182,7 @@ DOCKER_ARGS=(
     --cpus="${NUM_CPUS}"
     --ipc=host
     --shm-size="${SHM_SIZE}"
+    -e PYTHONUNBUFFERED=1
     -e OMP_NUM_THREADS="${THREADS}"
     -e OPENBLAS_NUM_THREADS="${THREADS}"
     -e MKL_NUM_THREADS="${THREADS}"
