@@ -127,27 +127,87 @@ def write_images_txt(
             f.write("\n")  # línea vacía de puntos 2D
 
 
+def deduplicate_sparse_pts3d(
+    pts3d_list: list,
+    colors_list: list,
+    voxel_fraction: float = 0.002,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Deduplica anchor points de get_sparse_pts3d() por voxel grid adaptativo.
+
+    get_sparse_pts3d() acumula observaciones de TODOS los pares que involucran
+    cada imagen (N_pares × N_píxeles_por_par puntos), resultando en millones de
+    duplicados del mismo punto físico 3D. Esta función los colapsa a un único
+    representante por celda de voxel, preservando toda la geometría.
+
+    El tamaño del voxel se adapta automáticamente a la escala de la escena:
+        voxel_size = diagonal_bbox × voxel_fraction
+    Con voxel_fraction=0.002 (0.2%) la resolución es análoga a tener ~500 celdas
+    por dimensión — suficiente para capturar detalles finos independientemente de
+    si la escena mide cm o km.
+
+    Retorna:
+        pts_dedup  (N_unique, 3)  float64 — puntos únicos finitos
+        cols_dedup (N_unique, 3)  float64 — colores correspondientes (0-1)
+    """
+    # Concatenar y filtrar NaN/Inf
+    parts_pts, parts_cols = [], []
+    for pts, cols in zip(pts3d_list, colors_list):
+        pts_np  = pts.detach().cpu().numpy() if isinstance(pts, torch.Tensor) else np.asarray(pts, dtype=float)
+        cols_np = np.asarray(cols, dtype=float)
+        if cols_np.max() > 1.0:
+            cols_np = cols_np / 255.0
+        valid = np.isfinite(pts_np).all(axis=1)
+        parts_pts.append(pts_np[valid])
+        parts_cols.append(cols_np[valid])
+
+    if not parts_pts or sum(len(p) for p in parts_pts) == 0:
+        return np.empty((0, 3), dtype=float), np.empty((0, 3), dtype=float)
+
+    all_pts  = np.concatenate(parts_pts,  axis=0)
+    all_cols = np.concatenate(parts_cols, axis=0)
+
+    # Eliminar outliers extremos (percentil 99.9 de la norma)
+    norms = np.linalg.norm(all_pts, axis=1)
+    p999  = np.percentile(norms, 99.9)
+    inlier = norms <= p999
+    all_pts  = all_pts[inlier]
+    all_cols = all_cols[inlier]
+
+    if len(all_pts) == 0:
+        return all_pts, all_cols
+
+    # Tamaño de voxel adaptativo a la escala de la escena
+    mins     = all_pts.min(axis=0)
+    maxs     = all_pts.max(axis=0)
+    diagonal = float(np.linalg.norm(maxs - mins))
+    voxel_size = max(diagonal * voxel_fraction, 1e-9)
+
+    # Índices de voxel por punto
+    vi    = ((all_pts - mins) / voxel_size).astype(np.int64)
+    shape = vi.max(axis=0).astype(np.int64) + 1
+
+    # Índice lineal (int64 evita overflow para scenes grandes)
+    linear = vi[:, 0] * (shape[1] * shape[2]) + vi[:, 1] * shape[2] + vi[:, 2]
+
+    # Primer punto de cada voxel
+    _, first = np.unique(linear, return_index=True)
+
+    return all_pts[first], all_cols[first]
+
+
 def write_points3d_txt(
     path: Path,
     pts3d_list: list,
     colors_list: list,
-    max_points: int = 100_000,
 ) -> int:
-    """Escribe points3D.txt desde puntos ancla esparsos por imagen.
+    """Escribe points3D.txt desde puntos 3D (ya deduplicados por voxel grid).
 
-    get_sparse_pts3d() acumula observaciones de todos los pares que involucran
-    cada imagen, resultando en millones de puntos con muchos duplicados.
-    max_points limita el total escrito para que points3D.txt sea verdaderamente
-    "sparse" (referencia visual) y siempre tenga menos puntos que fused.ply.
-    ACE y OneFormer3D no consumen este archivo — solo cameras.txt/images.txt
-    y fused.ply respectivamente.
-
-    Retorna el número de puntos escritos.
+    Cada punto recibe un ID único. El track es mínimo (image_id, point_idx).
+    ACE y OneFormer3D no leen este archivo; solo cameras.txt/images.txt y
+    fused.ply respectivamente. Retorna el número de puntos escritos.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Recoger todos los puntos válidos (finitos)
-    all_rows: list[str] = []
+    rows: list[str] = []
     pid = 1
     for img_idx, (pts, cols) in enumerate(zip(pts3d_list, colors_list)):
         pts_np = pts.detach().cpu().numpy() if isinstance(pts, torch.Tensor) else np.asarray(pts)
@@ -161,19 +221,10 @@ def write_points3d_txt(
                 r, g, b = int(rgb[0] * 255), int(rgb[1] * 255), int(rgb[2] * 255)
             else:
                 r, g, b = int(rgb[0]), int(rgb[1]), int(rgb[2])
-            all_rows.append(
+            rows.append(
                 f"{pid} {x:.6f} {y:.6f} {z:.6f} {r} {g} {b} 0.0 {img_idx + 1} {j}\n"
             )
             pid += 1
-
-    # Submuestrear si hay más puntos del límite
-    rng = np.random.default_rng(42)
-    if len(all_rows) > max_points:
-        idxs = rng.choice(len(all_rows), size=max_points, replace=False)
-        idxs.sort()
-        rows = [all_rows[i] for i in idxs]
-    else:
-        rows = all_rows
 
     with path.open("w", encoding="utf-8") as f:
         f.write("# 3D point list with one line of data per point:\n")
@@ -315,11 +366,16 @@ def adapt_outputs(
     )
     print(f"  images.txt  : {sparse_dst / 'images.txt'} ({len(image_names)} imágenes)")
 
-    # points3D.txt (puntos ancla esparsos)
+    # points3D.txt — deduplicar por voxel grid antes de escribir
+    # get_sparse_pts3d() acumula puntos de TODOS los pares por imagen (N duplicados
+    # del mismo punto físico). deduplicate_sparse_pts3d() los colapsa a un único
+    # representante por celda espacial, preservando la geometría completa.
     sparse_pts  = scene.get_sparse_pts3d()
     sparse_cols = scene.get_pts3d_colors()
-    n_sparse = write_points3d_txt(sparse_dst / "points3D.txt", sparse_pts, sparse_cols)
-    print(f"  points3D.txt: {n_sparse} puntos")
+    print("Deduplicando puntos ancla esparsos (voxel grid)...")
+    pts_dedup, cols_dedup = deduplicate_sparse_pts3d(sparse_pts, sparse_cols)
+    n_sparse = write_points3d_txt(sparse_dst / "points3D.txt", [pts_dedup], [cols_dedup])
+    print(f"  points3D.txt: {n_sparse} puntos únicos")
 
     # fused.ply (nube densa filtrada por confianza)
     print(f"Generando nube densa (subsample={subsample})...")

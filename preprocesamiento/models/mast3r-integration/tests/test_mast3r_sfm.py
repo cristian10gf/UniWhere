@@ -58,7 +58,7 @@ def test_c2w_to_colmap_pose_translation():
 # Writer tests (Task 2)
 # ---------------------------------------------------------------------------
 import tempfile
-from mast3r_sfm import write_cameras_txt, write_images_txt, write_points3d_txt, write_ply
+from mast3r_sfm import write_cameras_txt, write_images_txt, write_points3d_txt, write_ply, deduplicate_sparse_pts3d
 
 
 def test_write_cameras_txt_shared():
@@ -119,20 +119,42 @@ def test_write_points3d_txt_filters_nan():
         assert len(data) == 1
 
 
-def test_write_points3d_txt_max_points():
-    """get_sparse_pts3d() acumula millones de puntos de múltiples pares;
-    max_points garantiza que points3D.txt siempre tenga menos puntos que fused.ply."""
-    n_pts = 200
-    pts = [np.random.default_rng(0).random((n_pts, 3)) for _ in range(3)]
-    cols = [np.random.default_rng(1).random((n_pts, 3)) for _ in range(3)]
-    with tempfile.TemporaryDirectory() as td:
-        p = Path(td) / "points3D.txt"
-        # sin límite: 3*200 = 600 puntos
-        n_all = write_points3d_txt(p, pts, cols, max_points=600)
-        assert n_all == 600
-        # con límite: exactamente max_points
-        n_capped = write_points3d_txt(p, pts, cols, max_points=100)
-        assert n_capped == 100
+def test_deduplicate_sparse_pts3d_removes_duplicates():
+    """Puntos idénticos (mismo voxel) deben colapsar a uno solo."""
+    rng = np.random.default_rng(0)
+    # 5 puntos únicos reales
+    unique_pts = rng.random((5, 3)) * 10.0
+    cols_base  = rng.random((5, 3))
+    # Cada punto duplicado 3 veces con ruido sub-voxel (10× menor que el voxel)
+    # voxel_size = diagonal * 0.002; con diagonal ~sqrt(3)*10≈17, voxel≈0.034
+    # ruido de 0.001 << 0.034 → todos caen en el mismo voxel
+    noise = rng.random((5, 3, 3)) * 0.001
+    pts_list  = [unique_pts + noise[:, i, :] for i in range(3)]
+    cols_list = [cols_base + rng.random((5, 3)) * 0.001 for _ in range(3)]
+    pts_out, cols_out = deduplicate_sparse_pts3d(pts_list, cols_list)
+    # 5 puntos únicos × 3 copias → después de dedup deben quedar exactamente 5
+    assert pts_out.shape == (5, 3)
+    assert cols_out.shape == (5, 3)
+
+
+def test_deduplicate_sparse_pts3d_preserves_geometry():
+    """Puntos bien separados deben mantenerse casi todos (pérdida ≤ 1% por filtro outlier)."""
+    # 100 puntos en una cuadrícula 10×10, separados 1.0 en X e Y
+    grid = np.array([[i, j, 0.0] for i in range(10) for j in range(10)])
+    cols = np.zeros((100, 3))
+    pts_out, _ = deduplicate_sparse_pts3d([grid], [cols])
+    # Con diagonal ≈ 12.7 y voxel_size = 0.002*12.7 ≈ 0.025,
+    # puntos separados 1.0 >> 0.025 → casi todos sobreviven.
+    # El filtro outlier 99.9 percentil puede descartar el punto de mayor norma.
+    assert len(pts_out) >= 99
+
+
+def test_deduplicate_sparse_pts3d_filters_nan():
+    """NaN e Inf deben eliminarse antes de la deduplicación."""
+    pts = [np.array([[float('nan'), 0, 0], [1.0, 0.0, 0.0], [float('inf'), 0, 0]])]
+    cols = [np.zeros((3, 3))]
+    pts_out, _ = deduplicate_sparse_pts3d(pts, cols)
+    assert len(pts_out) == 1  # solo el punto finito
 
 
 def test_write_ply_confidence_filter():
