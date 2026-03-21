@@ -56,7 +56,7 @@ NITER2=500
 LR1="0.07"
 LR2="0.014"
 MIN_CONF_THR="1.5"
-SUBSAMPLE=4
+SUBSAMPLE=8
 MODEL_NAME="MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric"
 WEIGHTS=""
 SHELL_MODE=0
@@ -214,4 +214,15 @@ SFM_ARGS=(
 [ -n "$WEIGHTS" ] && SFM_ARGS+=(--weights "$WEIGHTS")
 [ -n "$RETRIEVAL_MODEL" ] && SFM_ARGS+=(--retrieval-model "$RETRIEVAL_MODEL")
 
-exec docker run "${DOCKER_ARGS[@]}" "$IMAGE_TAG" "${SFM_ARGS[@]}"
+# ── Log en tiempo real ─────────────────────────────────────────────────────────
+# Se guarda en data/<serie>/mast3r_sfm_<timestamp>.log y se muestra en pantalla.
+# stdbuf -oL: fuerza line-buffering en el stdout del proceso docker para que los
+# logs lleguen en tiempo real al pipe en lugar de acumularse en bloques de 64 KB.
+# (PYTHONUNBUFFERED=1 ya evita el buffer de Python; stdbuf cubre el buffer libc.)
+LOG_FILE="${DATA_ROOT}/${SERIE}/mast3r_sfm_$(date +%Y%m%d_%H%M%S).log"
+mkdir -p "${DATA_ROOT}/${SERIE}"
+echo "Log: ${LOG_FILE}"
+echo ""
+
+stdbuf -oL docker run "${DOCKER_ARGS[@]}" "$IMAGE_TAG" "${SFM_ARGS[@]}" 2>&1 | \
+    stdbuf -oL tee "$LOG_FILE"

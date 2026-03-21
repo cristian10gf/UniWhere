@@ -285,7 +285,7 @@ def write_ply(
             c_np = (c.detach().cpu().numpy() if isinstance(c, torch.Tensor)
                     else np.asarray(c, dtype=np.float32)).reshape(-1, 3)[mask]
             # scene.imgs están en float [0,1]; convertir a uint8
-            scale = 255.0 if float(c_np.max()) <= 1.0 else 1.0
+            scale = 255.0 if (len(c_np) == 0 or float(c_np.max()) <= 1.0) else 1.0
             all_cols.append((c_np * scale).clip(0, 255).astype(np.uint8))
         else:
             all_cols.append(np.full((int(mask.sum()), 3), 255, dtype=np.uint8))
