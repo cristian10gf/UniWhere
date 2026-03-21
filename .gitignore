@@ -3,6 +3,7 @@
 skills-*
 .github/agents/
 .github/prompts/
+CLAUDE.*
 
 
 .vscode/

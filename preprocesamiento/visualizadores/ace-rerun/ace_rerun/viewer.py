@@ -90,7 +90,7 @@ def log_to_rerun(
         est_colors = []
 
         for i, result in enumerate(ace_results):
-            rr.set_time_sequence("frame", i)
+            rr.set_time("frame", sequence=i)
 
             c2w = result["pose_c2w"]
             t = c2w[:3, 3]
@@ -116,9 +116,12 @@ def log_to_rerun(
                         rr.log("query/image", rr.Image(img))
                     break
 
-            rr.log("metrics/rotation_error_deg", rr.Scalar(result["rot_err"]))
-            rr.log("metrics/translation_error_cm", rr.Scalar(result["trans_err"] * 100))
-            rr.log("metrics/inlier_count", rr.Scalar(result["inlier_count"]))
+            rr.log("metrics/rotation_error_deg", rr.Scalars([float(result["rot_err"])]))
+            rr.log(
+                "metrics/translation_error_cm",
+                rr.Scalars([float(result["trans_err"] * 100)]),
+            )
+            rr.log("metrics/inlier_count", rr.Scalars([float(result["inlier_count"])]))
 
             err_color = error_to_color(result["rot_err"], result["trans_err"])
             est_positions.append(t)
@@ -134,7 +137,7 @@ def log_to_rerun(
 
     elif test_poses:
         for i, (pose, img_path) in enumerate(zip(test_poses, test_images)):
-            rr.set_time_sequence("frame", i)
+            rr.set_time("frame", sequence=i)
             rr.log("world/cameras/test", rr.Transform3D(
                 translation=pose[:3, 3], mat3x3=pose[:3, :3]))
 
