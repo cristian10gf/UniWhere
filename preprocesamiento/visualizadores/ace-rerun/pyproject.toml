@@ -12,8 +12,9 @@ dependencies = [
     "scikit-image",
     "Pillow",
     "plyfile",
-    "torchvision"
 ]
 
 [dependency-groups]
-dev = []
+dev = [
+    "pytest",
+]
