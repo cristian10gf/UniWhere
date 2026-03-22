@@ -27,7 +27,7 @@ def extract_point_cloud_from_network(
     Follows the approach described in ACE paper section B.5.
     """
     import torch
-    from torch.cuda.amp import autocast
+    from torch.amp import autocast
     from torch.utils.data import DataLoader
 
     setup_ace_imports(ace_dir)
@@ -39,6 +39,8 @@ def extract_point_cloud_from_network(
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    use_half = device.type == "cuda"
+
     _logger.info(f"Loading encoder: {encoder_path}")
     encoder_state = torch.load(encoder_path, map_location=device, weights_only=True)
     _logger.info(f"Loading head: {head_path}")
@@ -46,6 +48,8 @@ def extract_point_cloud_from_network(
 
     network = Regressor.create_from_split_state_dict(encoder_state, head_state)
     network = network.to(device).eval()
+    if use_half:
+        network = network.half()
 
     train_dir = scene_dir / "train"
     dataset = CamLocDataset(root_dir=train_dir, mode=0, image_height=image_height)
@@ -63,7 +67,7 @@ def extract_point_cloud_from_network(
             gt_inv_pose = gt_inv_pose.to(device, non_blocking=True)
             K = K.to(device, non_blocking=True)
 
-            with autocast():
+            with autocast(device.type, enabled=use_half):
                 scene_coords = network(image)
 
             B, C, H, W = scene_coords.shape
