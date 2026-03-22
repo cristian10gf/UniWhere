@@ -30,6 +30,11 @@ def get_pinhole_params(calibration):
     if isinstance(calibration, np.ndarray) and calibration.shape == (3, 3):
         return calibration[0, 0], calibration[1, 1], calibration[0, 2], calibration[1, 2]
     f = float(calibration)
+    _logger.warning(
+        "Calibración escalar: usando punto principal asumido (320, 240). "
+        "Puede ser incorrecto si la resolución de imagen no es 640×480. "
+        "Usa un archivo de calibración 3×3 para mayor precisión."
+    )
     return f, f, 320.0, 240.0
 
 
