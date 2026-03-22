@@ -215,7 +215,7 @@ def main():
         _logger.error(f"Escena ACE no encontrada: {args.scene}")
         sys.exit(1)
 
-    mapping_poses, mapping_images = load_split_poses(args.scene, "train")
+    mapping_poses, _ = load_split_poses(args.scene, "train")
     test_poses, test_images = load_split_poses(args.scene, "test")
 
     ace_results = None
