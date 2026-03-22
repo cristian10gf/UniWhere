@@ -174,7 +174,6 @@ def main():
         pc_positions=pc_positions,
         pc_colors=pc_colors,
         mapping_poses=mapping_poses,
-        mapping_images=mapping_images,
         test_poses=test_poses,
         test_images=test_images,
         ace_results=ace_results,

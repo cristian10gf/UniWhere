@@ -41,7 +41,7 @@ def error_to_color(rot_err: float, trans_err: float,
 
 
 def _build_image_cache(image_paths: list) -> dict:
-    """Carga todas las imágenes en memoria con cv2 (más rápido que skimage)."""
+    """Carga y redimensiona todas las imágenes en memoria (más rápido que skimage)."""
     cache = {}
     for path in image_paths:
         p = Path(path)
@@ -51,7 +51,7 @@ def _build_image_cache(image_paths: list) -> dict:
         if img_bgr is None:
             continue
         img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-        cache[p.name] = img_rgb
+        cache[p.name] = _resize_for_rerun(img_rgb)
     _logger.info(f"Image cache: {len(cache)}/{len(image_paths)} imágenes cargadas")
     return cache
 
@@ -60,7 +60,6 @@ def log_to_rerun(
     pc_positions: np.ndarray,
     pc_colors: np.ndarray | None,
     mapping_poses: list,
-    mapping_images: list,
     test_poses: list,
     test_images: list,
     ace_results: list | None,
@@ -122,7 +121,11 @@ def log_to_rerun(
         _logger.info(f"Cámaras mapping: {len(sampled)}/{len(mapping_poses)} loggadas")
 
     # --- Pre-cargar imágenes de test en cache ---
+    # Incluir tanto test_images como filenames de ace_results (pueden diferir)
     all_test_images = list(test_images) if test_images else []
+    if ace_results:
+        ace_image_paths = [r["filename"] for r in ace_results if Path(r["filename"]).exists()]
+        all_test_images = list({Path(p).name: p for p in all_test_images + ace_image_paths}.values())
     image_cache = _build_image_cache(all_test_images)
 
     # --- Poses estimadas por ACE con timeline ---
@@ -151,7 +154,7 @@ def log_to_rerun(
 
             fname = Path(result["filename"]).name
             if fname in image_cache:
-                img = _resize_for_rerun(image_cache[fname])
+                img = image_cache[fname]
                 rr.log("world/cameras/estimated/image", rr.Image(img))
                 rr.log("query/image", rr.Image(img))
 
@@ -192,7 +195,7 @@ def log_to_rerun(
 
             fname = Path(img_path).name
             if fname in image_cache:
-                img = _resize_for_rerun(image_cache[fname])
+                img = image_cache[fname]
                 rr.log("world/cameras/test/image", rr.Image(img))
                 rr.log("query/image", rr.Image(img))
 
